@@ -1,4 +1,9 @@
 import ollama
+from langchain.document_loaders import DirectoryLoader, TextLoader, PyMuDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain.chains import RetrievalQA
 
 model_name = "qwen3:4b-instruct"
 prompt = "how do i make a cake"
@@ -22,7 +27,7 @@ print(response.response)
 # For PDFs, text, etc: pip install pymupdf python-docx tiktoken
 
 #Creating a folder(later) and loading documents
-from langchain.document_loaders import DirectoryLoader, TextLoader, PyMuDFLoader
+
 def load_docs(folder_path):
     txt_loader = DirectoryLoader(folder_path, glob="*.txt", loader_cls=TextLoader)
     pdf_loader = DirectoryLoader(folder_path, glob="*.pdf", loader_cls=PyMuDFLoader)
@@ -30,22 +35,21 @@ def load_docs(folder_path):
     return documents
 
 #Splitting these documents
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 def split_docs(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = text_splitter.split_documents(documents)
     return chunks
 
 #Creating embeddings for these chunks and storing in vector database
-from langchain.embeddings import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
+
 def create_vector_store(chunks):
     embeddings = OllamaEmbeddings(model_name="qwen3:4b-instruct")
     vector_store = Chroma.from_documents(chunks, embeddings, persist_directory="./chroma_db")
     return vector_store
 
 # let's start building our basic pipeline 
-from langchain.chains import RetrievalQA #this is a chain that combines retrieval and Q&A
+
 def build_QA_pipeline(vector_store):
     retriever = vector_store.as_retriever(search_kwargs={"k": 1}) #k is the number of relevant documents that are retrieved (how much context will the LLM receive)
     qa_chain = RetrievalQA.from_chain_type(
