@@ -61,7 +61,7 @@ def build_QA_pipeline(vector_store):
 )
     return qa_chain
 
-#Putting it all together
+#Putting it all together in a simple RAG pipeline
 documents = load_docs("test_docs")
 chunks = split_docs(documents)
 vector_store = create_vector_store(chunks)
