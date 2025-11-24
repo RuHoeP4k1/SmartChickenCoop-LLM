@@ -2,8 +2,8 @@ import ollama
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain_classic.chains import retrieval_qa
+from langchain_chroma import Chroma
+from langchain_classic.chains import RetrievalQA
 from langchain_ollama.llms import OllamaLLM
 model_name = "qwen3:4b-instruct"
 '''prompt = "how do i make a cake"
@@ -52,13 +52,20 @@ def create_vector_store(chunks):
 
 def build_QA_pipeline(vector_store):
     retriever = vector_store.as_retriever(search_kwargs={"k": 1})
-    llm = OllamaLLM(model="qwen3:4b-instruct", temperature=0.7, num_predict=500)
-    qa_chain = retrieval_qa.(
-    llm=llm,
-    chain_type="stuff",
-    retriever=retriever,
-    return_source_documents=True
-)
+
+    llm = OllamaLLM(
+        model="qwen3:4b-instruct",
+        temperature=0.7,
+        num_predict=500
+    )
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=True
+    )
+
     return qa_chain
 
 #Putting it all together in a simple RAG pipeline
@@ -67,6 +74,6 @@ chunks = split_docs(documents)
 vector_store = create_vector_store(chunks)
 qa_pipeline = build_QA_pipeline(vector_store)
 query = "Wat zijn voorbeelden van duurzame energiebronnen?"
-result = qa_pipeline.run(query)
+result = qa_pipeline.invoke({"query": query})
 print("Answer:", result['result'])
 print("/nSources:", result['source_documents'])
