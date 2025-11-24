@@ -73,7 +73,7 @@ documents = load_docs("test_docs")
 chunks = split_docs(documents)
 vector_store = create_vector_store(chunks)
 qa_pipeline = build_QA_pipeline(vector_store)
-query = "Wat zijn voorbeelden van duurzame energiebronnen?"
+query = "Waar wordt machine learning toegepast?"
 result = qa_pipeline.invoke({"query": query})
 print("Answer:", result['result'])
 print("/nSources:", result['source_documents'])
