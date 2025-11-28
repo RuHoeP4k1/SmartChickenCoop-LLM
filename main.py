@@ -68,12 +68,44 @@ def build_QA_pipeline(vector_store):
 
     return qa_chain
 
-#Putting it all together in a simple RAG pipeline
-documents = load_docs("test_docs")
-chunks = split_docs(documents)
-vector_store = create_vector_store(chunks)
-qa_pipeline = build_QA_pipeline(vector_store)
-query = "Waar wordt machine learning toegepast?"
-result = qa_pipeline.invoke({"query": query})
-print("Answer:", result['result'])
-print("/nSources:", result['source_documents'])
+
+
+def answer_from_dataset(folder_path: str, query: str):
+    """
+    Simpele functie:
+    - leest documenten uit folder_path
+    - splitst ze in chunks
+    - bouwt een vector store
+    - stuurt je query (prompt) door de QA-pipeline
+    """
+    # 1. Load & split docs
+    documents = load_docs(folder_path)
+    chunks = split_docs(documents)
+
+    # 2. Build / load vector store
+    vector_store = create_vector_store(chunks)
+
+    # 3. Build QA pipeline
+    qa_pipeline = build_QA_pipeline(vector_store)
+
+    # 4. Ask question
+    result = qa_pipeline.invoke({"query": query})
+
+    # 5. Print nicely
+    print(f"\n=== Vraag ===\n{query}\n")
+    print("=== Antwoord ===")
+    print(result["result"])
+
+    print("\n=== Bronnen ===")
+    for i, doc in enumerate(result["source_documents"], start=1):
+        print(f"\nBron {i}:")
+        print("Bestand:", doc.metadata.get("source"))
+        print("Tekstfragment:", doc.page_content[:300], "...")
+
+    return result
+
+if __name__ == "__main__":
+    folder = "test_docs"
+    query = "Waar wordt machine learning toegepast?"  # simpele test prompt
+
+    answer_from_dataset(folder, query)
