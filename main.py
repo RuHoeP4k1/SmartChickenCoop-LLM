@@ -1,4 +1,5 @@
 import ollama
+import json
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
@@ -33,6 +34,14 @@ def load_docs(folder_path):
     #pdf_loader = DirectoryLoader(folder_path, glob="*.pdf", loader_cls=PyMuDFLoader)
     documents = txt_loader.load() #+ pdf_loader.load()
     return documents
+
+#Sensor data uit json file lezen
+
+def load_sensor_data(json_path: str) -> dict:
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data
+
 
 #Splitting these documents
 
@@ -76,16 +85,29 @@ def build_QA_pipeline(vector_store):
 
     return qa_chain
 
+def build_query_with_data(sensor_data: dict, user_question: str) -> str:
+    """
+    Bouwt een query waarin de realtime data
+    expliciet verwerkt zit.
+    """
+    hsi = sensor_data.get("heat_stress_index", "onbekend")
+    temp = sensor_data.get("temperature_c", "onbekend")
+    hum = sensor_data.get("humidity_pct", "onbekend")
 
+    query = (
+        f"De huidige sensordata voor het kippenhok is als volgt:\n"
+        f"- Heat Stress Index (HSI): {hsi}\n"
+        f"- Temperatuur: {temp} °C\n"
+        f"- Luchtvochtigheid: {hum} %\n\n"
+        f"Gebruik deze actuele waarden samen met de kennis uit de documenten "
+        f"om de volgende vraag te beantwoorden:\n"
+        f"{user_question}"
+    )
+    return query
 
+"""
 def answer_from_dataset(folder_path: str, query: str):
-    """
-    Simpele functie:
-    - leest documenten uit folder_path
-    - splitst ze in chunks
-    - bouwt een vector store
-    - stuurt de query (prompt) door de QA-pipeline
-    """
+    
     # 1. Load & split docs
     documents = load_docs(folder_path)
     chunks = split_docs(documents)
@@ -111,10 +133,44 @@ def answer_from_dataset(folder_path: str, query: str):
         print("Tekstfragment:", doc.page_content[:500], "...")
 
     return result
+"""
+
+def answer_with_realtime_data(folder_path: str, json_path: str, user_question: str):
+    # 1. Laad documenten en maak de vector store
+    documents = load_docs(folder_path)
+    chunks = split_docs(documents)
+    vector_store = create_vector_store(chunks)
+    qa_pipeline = build_QA_pipeline(vector_store)
+
+    # 2. Laad sensordata
+    sensor_data = load_sensor_data(json_path)
+
+    # 3. Bouw query met HSI erin
+    query = build_query_with_data(sensor_data, user_question)
+
+    # 4. Vraag aan RAG-pipeline
+    result = qa_pipeline.invoke({"query": query})
+
+    print("\n=== Query die naar de RAG ging ===")
+    print(query)
+
+    print("\n=== Antwoord ===")
+    print(result["result"])
+
+    print("\n=== Bronnen ===")
+    for i, doc in enumerate(result["source_documents"], start=1):
+        print(f"\nBron {i}:")
+        print("Bestand:", doc.metadata.get("source"))
+        print("Tekstfragment:\n")
+        print(doc.page_content[:800], "...\n")
+
+    return result
+
 
 if __name__ == "__main__":
     folder = "test_docs"
+    sensor_json = "data/sensor_data.json"
     query = "Waar wordt machine learning toegepast?"  # simpele test prompt
 
-    answer_from_dataset(folder, query)
+    answer_with_realtime_data(folder, sensor_json, query)
 
