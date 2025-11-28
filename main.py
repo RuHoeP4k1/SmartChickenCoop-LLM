@@ -37,7 +37,7 @@ def load_docs(folder_path):
 #Splitting these documents
 
 def split_docs(documents):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
     chunks = text_splitter.split_documents(documents)
     return chunks
 
@@ -51,7 +51,15 @@ def create_vector_store(chunks):
 # let's start building our basic pipeline 
 
 def build_QA_pipeline(vector_store):
-    retriever = vector_store.as_retriever(search_kwargs={"k": 1})
+
+    retriever = vector_store.as_retriever(
+        search_type="mmr",  #Maximal Marginal Relevance zoekalgoritme
+        search_kwargs={
+            "k": 3,  #hoeveel bronnen uiteindelijk worden gebruikt
+            "fetch_k": 15,  #hoeveel kandidaten eerst ophalen
+            "lambda_mult": 0.7  #balans: relevant vs. divers
+        }
+    )
 
     llm = OllamaLLM(
         model="qwen3:4b-instruct",
@@ -76,7 +84,7 @@ def answer_from_dataset(folder_path: str, query: str):
     - leest documenten uit folder_path
     - splitst ze in chunks
     - bouwt een vector store
-    - stuurt je query (prompt) door de QA-pipeline
+    - stuurt de query (prompt) door de QA-pipeline
     """
     # 1. Load & split docs
     documents = load_docs(folder_path)
@@ -109,3 +117,4 @@ if __name__ == "__main__":
     query = "Waar wordt machine learning toegepast?"  # simpele test prompt
 
     answer_from_dataset(folder, query)
+
