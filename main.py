@@ -37,14 +37,14 @@ def load_docs(folder_path):
 #Splitting these documents
 
 def split_docs(documents):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = text_splitter.split_documents(documents)
     return chunks
 
 #Creating embeddings for these chunks and storing in vector database
 
 def create_vector_store(chunks):
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = OllamaEmbeddings(model="qwen3-embedding:0.6b") #ollama pull qwen3-embedding:0.6b
     vector_store = Chroma.from_documents(chunks, embeddings, persist_directory="./chroma_db")
     return vector_store
 
@@ -57,7 +57,7 @@ def build_QA_pipeline(vector_store):
         search_kwargs={
             "k": 3,  #hoeveel bronnen uiteindelijk worden gebruikt
             "fetch_k": 15,  #hoeveel kandidaten eerst ophalen
-            "lambda_mult": 0.7  #balans: relevant vs. divers
+            "lambda_mult": 0.95  #balans: relevant vs. divers
         }
     )
 
@@ -108,7 +108,7 @@ def answer_from_dataset(folder_path: str, query: str):
     for i, doc in enumerate(result["source_documents"], start=1):
         print(f"\nBron {i}:")
         print("Bestand:", doc.metadata.get("source"))
-        print("Tekstfragment:", doc.page_content[:300], "...")
+        print("Tekstfragment:", doc.page_content[:500], "...")
 
     return result
 
