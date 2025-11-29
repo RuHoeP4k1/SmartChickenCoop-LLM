@@ -145,7 +145,7 @@ def answer_with_realtime_data(folder_path: str, json_path: str, user_question: s
     # 2. Laad sensordata
     sensor_data = load_sensor_data(json_path)
 
-    # 3. Bouw query met HSI erin
+    # 3. Bouw query met data erin
     query = build_query_with_data(sensor_data, user_question)
 
     # 4. Vraag aan RAG-pipeline
