@@ -1,5 +1,0 @@
-Machine learning is een tak van kunstmatige intelligentie waarbij computers leren van data. Het doel is om patronen te herkennen en voorspellingen te doen.
-
-Er zijn drie hoofdvormen: supervised learning, unsupervised learning en reinforcement learning. Bij supervised learning krijgt een algoritme voorbeelden met labels. Unsupervised learning zoekt zelf patronen zonder labels. Reinforcement learning maakt gebruik van beloningen en straffen om beslissingen te verbeteren.
-
-Machine learning wordt toegepast in spraakherkenning, aanbevelingssystemen, gezondheidszorg en zelfrijdende auto's.

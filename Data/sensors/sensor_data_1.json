@@ -1,0 +1,9 @@
+{
+  "timestamp": "2025-11-28T19:55:00",
+  "temperature_c": 30.5,
+  "humidity_pct": 75,
+  "heat_stress_index": "warning",
+  "co2_ppm": "no warning",
+  "feeder_status": "Full",
+  "waterer_status": "Needs Refill"
+  }

@@ -1,24 +1,108 @@
-# ===== Python / Conda =====
-# Ignore local virtual environments
+# ============================================
+# Python / Conda Environments
+# ============================================
 venv/
 .env/
 .venv/
 env/
+*.env
 
-# Ignore Conda environments (usually in the user folder)
-*/anaconda3/envs/
+# Conda environment folders (should never be in repo)
 anaconda3/
 miniconda3/
+*/anaconda3/
+*/miniconda3/
 
-# ===== Python cache and compiled files =====
+
+# ============================================
+# Python Cache & Bytecode
+# ============================================
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.pdb
 *$py.class
 
-# ===== IDE / Editor =====
-.idea/
-.vscode/
 
-# ===== OS files =====
+# ============================================
+# IDE / Editor Files
+# ============================================
+.vscode/
+.idea/
+*.iml
+
+
+# ============================================
+# OS Files
+# ============================================
 .DS_Store
 Thumbs.db
+
+
+# ============================================
+# Project: Chroma Vector Database
+# (VERY IMPORTANT — prevents committing large DB)
+# ============================================
+chroma_db/
+chroma_db/*
+
+
+# ============================================
+# Ollama (local model cache)
+# ============================================
+~/.ollama/
+ollama/
+ollama_models/
+artisan/
+models/
+
+
+# ============================================
+# Project Data / Temp Folders
+# ============================================
+Data/*.json
+Data/*.csv
+Data/*.log
+Data/*.tmp
+*.tmp
+
+
+# ============================================
+# Log files
+# ============================================
+*.log
+
+
+# ============================================
+# Jupyter / Notebooks
+# ============================================
+.ipynb_checkpoints/
+
+
+# ============================================
+# Gradio cache / build
+# ============================================
+gradio/
+gradio_cached_examples/
+__gradio_temp__/
+static/
+assets/
+
+
+# ============================================
+# Local test outputs
+# ============================================
+test_output/
+test_results/
+*.test
+*.local
+
+
+# ============================================
+# YAML environments (optional)
+# If you want to track them, remove this block
+# ============================================
+environment.yml
+environment_mac.yml
+environment_windows.yml
