@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path  
 
-from langchain_community.document_loaders import TextLoader, PyMuPDFLoader
+from langchain_community.document_loaders import TextLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
@@ -13,6 +13,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.prompts import ChatPromptTemplate
 
 import gradio as gr
+import re
 
 
 
@@ -26,26 +27,53 @@ model_name = "qwen3:4b-instruct"
 
 #Creating a folder(later) and loading documents
 
+
+def clean_text(text: str) -> str:
+    if not text:
+        return ""
+
+    # Remove null bytes and bad unicode
+    text = text.replace("\x00", "").replace("\u0000", "")
+
+    # Normalize line breaks / spacing
+    text = text.replace("\r", " ").replace("\n", " ")
+
+    # Collapse multiple spaces
+    text = " ".join(text.split())
+
+    # Remove extremely long repeated characters (OCR noise)
+    text = re.sub(r"(.)\1{10,}", r"\1", text)
+
+    # Hard cap: never allow extremely long text blobs
+    if len(text) > 3000:
+        text = text[:3000]
+
+    return text
+
+
 def load_docs(folder_path: str):
     documents = []
 
-    #Load TXT files
+    # TXT files
     for file_path in Path(folder_path).glob("*.txt"):
         loader = TextLoader(str(file_path))
         docs = loader.load()
         for doc in docs:
             doc.metadata["source"] = file_path.name
+            doc.page_content = clean_text(doc.page_content)
         documents.extend(docs)
 
-    #Load PDF files
+    # PDF files
     for file_path in Path(folder_path).glob("*.pdf"):
-        loader = PyMuPDFLoader(str(file_path))
+        loader = PyPDFLoader(str(file_path))
         docs = loader.load()
         for doc in docs:
             doc.metadata["source"] = file_path.name
+            doc.page_content = clean_text(doc.page_content)
         documents.extend(docs)
 
     return documents
+
 
 #Sensor data uit json file lezen
 
@@ -54,11 +82,9 @@ def load_sensor_data(json_path: str) -> dict:
         data = json.load(f)
     return data
 
-
 #Splitting these documents
 
-def split_docs(documents, chunk_size=500, chunk_overlap=100):
-    #recursve text splitter splits on logical boundaries
+def split_docs(documents, chunk_size=800, chunk_overlap=100):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap
@@ -66,33 +92,59 @@ def split_docs(documents, chunk_size=500, chunk_overlap=100):
 
     chunks = splitter.split_documents(documents)
 
-    # Add chunk IDs to metadata for explainability (opional)
+    # Enforce a strict limit to avoid embedding crashes
+    for c in chunks:
+        if len(c.page_content) > 2500:
+            c.page_content = c.page_content[:2500]
+
     for i, chunk in enumerate(chunks):
         chunk.metadata["chunk_id"] = i
 
     return chunks
 
+
 #Creating embeddings for these chunks and storing in vector database
 
 def vector_store(chunks, persist_dir="chroma_db"):
-    """ makes that the whole data base is not reembedded every time we run the code """
+    """Create a Chroma vector store with safe batched embeddings for Windows/Ollama."""
+
     embedding_model = OllamaEmbeddings(model="nomic-embed-text")
 
-    # If DB exists, load it
+    # Try loading existing DB
     if os.path.exists(persist_dir):
         return Chroma(
             persist_directory=persist_dir,
             embedding_function=embedding_model
         )
 
-    # Otherwise create a new DB
-    vector_store = Chroma.from_documents(
-        documents=chunks,
-        embedding=embedding_model,
-        persist_directory=persist_dir
+    print("No existing DB found — creating new embeddings...")
+    print(f"Total chunks: {len(chunks)}")
+
+    # Extract text
+    texts = [c.page_content for c in chunks]
+    metadatas = [c.metadata for c in chunks]
+
+    # Batch embedding
+    batch_size = 10 
+    all_embeddings = []
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+        emb = embedding_model.embed_documents(batch)
+        all_embeddings.extend(emb)
+
+    # Create vector DB manually
+    vectordb = Chroma(
+        persist_directory=persist_dir,
+        embedding_function=embedding_model
     )
 
-    return vector_store
+    vectordb.add_texts(texts=texts, metadatas=metadatas, embeddings=all_embeddings)
+    vectordb._persist()
+
+    print("Embedding finished successfully.")
+    return vectordb
+
 
 # let's start building our basic pipeline 
 
@@ -113,9 +165,9 @@ def build_QA_pipeline(vector_store):
 
     # 2. LLM - Qwen 4B via Ollama
     llm = OllamaLLM(
-        model="qwen3:4b-instruct",
-        temperature=0.7,
-        num_predict=500
+        model="qwen2.5:1.5b-instruct",
+        temperature=0.4,
+        num_predict=300
     )
 
     # 3. RAG Prompt (promt how the system should behave and what user input and contect is available)
@@ -123,7 +175,8 @@ def build_QA_pipeline(vector_store):
         ("system",
          "You are a helpful AI assistant. That help users with questions about their chickens. "
          "Use ONLY the provided document excerpts to answer the question. "
-         "answer must have a be suggest clear and actionale advice to the user. "
+         "answer must have a be suggest clear and actionale advice to the user. do not make eternally long lists. "
+         "When making list of observed issues and actions use new lines and bullet points to increase the readablility "
          "If the answer cannot be found in the documents, say so. "),
         ("human",
          "Question: {input}\n\n"
@@ -269,6 +322,7 @@ def answer_with_realtime_data(folder_path: str, json_path: str, user_question: s
     # 1. Load documents and create vector store
     documents = load_docs(folder_path)
     chunks = split_docs(documents)
+    print("Number of chunks:", len(chunks))
     vs = vector_store(chunks)    
     qa_pipeline = build_QA_pipeline(vs)
 
