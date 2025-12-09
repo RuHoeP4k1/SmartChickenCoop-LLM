@@ -15,18 +15,7 @@ from langchain.prompts import ChatPromptTemplate
 import gradio as gr
 import re
 
-
-
-model_name = "qwen3:4b-instruct"
-
-#RAG_pipeline
-#what to install
-# Install langchain & embeddings support: pip install langchain langchain-community langchain-text-splitters
-# Install your local vector database: pip install chromadb  # easiest + local
-# For PDFs, text, etc: pip install pymupdf python-docx tiktoken
-
-#Creating a folder(later) and loading documents
-
+#text cleaning function to remove bad characters and normalize spacing to improve embedding quality and speed
 
 def clean_text(text: str) -> str:
     if not text:
@@ -51,6 +40,8 @@ def clean_text(text: str) -> str:
     return text
 
 
+
+#Loading documents from a folder (txt and pdf)
 def load_docs(folder_path: str):
     documents = []
 
@@ -75,14 +66,14 @@ def load_docs(folder_path: str):
     return documents
 
 
-#Sensor data uit json file lezen
+#loading demo (static) sensor data from json file
 
 def load_sensor_data(json_path: str) -> dict:
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
 
-#Splitting these documents
+#Splitting these documents into smaller chunks for embedding
 
 def split_docs(documents, chunk_size=800, chunk_overlap=100):
     splitter = RecursiveCharacterTextSplitter(
@@ -124,7 +115,7 @@ def vector_store(chunks, persist_dir="chroma_db"):
     texts = [c.page_content for c in chunks]
     metadatas = [c.metadata for c in chunks]
 
-    # Batch embedding
+    # Batch embedding (chuncks were too big for one go)(workaround no clue if it good practice)
     batch_size = 10 
     all_embeddings = []
 
@@ -133,7 +124,7 @@ def vector_store(chunks, persist_dir="chroma_db"):
         emb = embedding_model.embed_documents(batch)
         all_embeddings.extend(emb)
 
-    # Create vector DB manually
+    # Create vector DB 
     vectordb = Chroma(
         persist_directory=persist_dir,
         embedding_function=embedding_model
@@ -146,13 +137,9 @@ def vector_store(chunks, persist_dir="chroma_db"):
     return vectordb
 
 
-# let's start building our basic pipeline 
+#pipeline building function
 
 def build_QA_pipeline(vector_store):
-    """
-    Build a modern English-only RAG pipeline using LCEL.
-    """
-
     # 1. Retriever - fetch relevant document chunks
     retriever = vector_store.as_retriever(
         search_type="mmr",
@@ -163,7 +150,7 @@ def build_QA_pipeline(vector_store):
         }
     )
 
-    # 2. LLM - Qwen 4B via Ollama
+    # 2. LLM - Qwen 2.5:1.5b via Ollama
     llm = OllamaLLM(
         model="qwen2.5:1.5b-instruct",
         temperature=0.4,
@@ -197,6 +184,9 @@ def build_QA_pipeline(vector_store):
     )
 
     return rag_chain
+
+#purely for the demo app to list and load sensor files
+
 def list_sensor_files(folder="Data/sensors"):
     """
     Returns a list of all .json sensor dataset filenames
@@ -212,6 +202,8 @@ def load_sensor_file(file_name, folder="Data/sensors"):
     with open(full_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
+# Interpret raw sensor data into a clean summary
 
 def interpret_sensor_data(sensor_data: dict) -> str:
     """
@@ -272,7 +264,7 @@ def interpret_sensor_data(sensor_data: dict) -> str:
 
     return "\n".join(messages)
 
-
+#putting it all together for retrieval
 
 def build_query_with_data(sensor_summary: str, user_question: str) -> str:
     """
@@ -286,43 +278,10 @@ def build_query_with_data(sensor_summary: str, user_question: str) -> str:
         f"Question:\n{user_question}"
     )
 
-
-
-"""
-def answer_from_dataset(folder_path: str, query: str):
-    
-    # 1. Load & split docs
-    documents = load_docs(folder_path)
-    chunks = split_docs(documents)
-
-    # 2. Build / load vector store
-    vector_store = create_vector_store(chunks)
-
-    # 3. Build QA pipeline
-    qa_pipeline = build_QA_pipeline(vector_store)
-
-    # 4. Ask question
-    result = qa_pipeline.invoke({"query": query})
-
-    # 5. Print nicely
-    print(f"\n=== Vraag ===\n{query}\n")
-    print("=== Antwoord ===")
-    print(result["result"])
-
-    print("\n=== Bronnen ===")
-    for i, doc in enumerate(result["source_documents"], start=1):
-        print(f"\nBron {i}:")
-        print("Bestand:", doc.metadata.get("source"))
-        print("Tekstfragment:", doc.page_content[:500], "...")
-
-    return result
-"""
-
 def answer_with_realtime_data(folder_path: str, json_path: str, user_question: str):
     # 1. Load documents and create vector store
     documents = load_docs(folder_path)
     chunks = split_docs(documents)
-    print("Number of chunks:", len(chunks))
     vs = vector_store(chunks)    
     qa_pipeline = build_QA_pipeline(vs)
 
@@ -333,18 +292,17 @@ def answer_with_realtime_data(folder_path: str, json_path: str, user_question: s
     sensor_summary = interpret_sensor_data(sensor_data)
     query = build_query_with_data(sensor_summary, user_question)
 
-
     # 4. Run RAG pipeline
     result = qa_pipeline.invoke({"input": query})  
 
-    print("\n=== Query sent to RAG ===")
+    print("\n Query sent to RAG ")
     print(query)
 
-    print("\n=== Answer ===")
-    print(result["answer"])            # FIXED
+    print("\n Answer")
+    print(result["answer"])           
 
-    print("\n=== Sources ===")
-    for i, doc in enumerate(result["context"], start=1):   # FIXED
+    print("\n Sources ")
+    for i, doc in enumerate(result["context"], start=1):  
         print(f"\nSource {i}:")
         print("File:", doc.metadata.get("source"))
 
