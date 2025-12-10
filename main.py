@@ -266,6 +266,8 @@ def interpret_sensor_data(sensor_data: dict) -> str:
 
 #putting it all together for retrieval
 
+#als none mag die prompt van 'use this sensor data niet in de query
+
 def build_query_with_data(sensor_summary: str, user_question: str) -> str:
     """
     Build the final RAG query using a clean,
