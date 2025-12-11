@@ -104,7 +104,7 @@ def rag_answer_for_ui(user_question, selected_sensor):
             <b>👤 You:</b> {user}
         </div>
         <div style='background:#E8F5E9; padding:10px; border-radius:8px;'>
-            <b>🐔 CoopBot:</b> {bot}
+            <b>🐔 ChatKippieT:</b> {bot}
         </div>
         """
     chat_html += "</div>"
@@ -149,19 +149,25 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             padding: 12px 25px !important;
         }
 
-        /* Logo top-right – larger */
+        /* FIXED LOGO */
         #logo_container {
-            position: fixed;
+            position: fixed !important;
             top: 15px;
             right: 20px;
             z-index: 99999;
+            pointer-events: none;
         }
 
         #logo_container img {
             height: 150px;
         }
 
-        /* Header bar refinement */
+        /* Force correct fixed behavior */
+        body > #logo_container {
+            position: fixed !important;
+        }
+
+        /* Header styling */
         .ccc_header {
             text-align: center;
             padding: 15px;
@@ -194,7 +200,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             padding-right: 8px;
         }
 
-        /* Scrollable sources box inside accordion */
+        /* Scrollable sources */
         #sources_box {
             max-height: 240px;
             overflow-y: auto;
@@ -264,7 +270,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
     </style>
     """)
 
-    # ---------- LOGO ----------
+    # ---------- FIXED LOGO ----------
     gr.HTML(f"""
         <div id="logo_container">
             <img src="data:image/png;base64,{logo_b64}" alt="Chicken Coop Comfort Logo">
@@ -282,7 +288,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
     # ---------- MAIN LAYOUT ----------
     with gr.Row():
 
-        # LEFT COLUMN: controls + sensor summary
+        # LEFT controls
         with gr.Column(scale=1):
             sensor_choice = gr.Dropdown(
                 choices=list_sensor_files("Data/sensors"),
@@ -297,7 +303,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             ask_btn = gr.Button("Ask", elem_id="ask_btn")
             sensor_cards_display = gr.HTML(label="📡 Sensor Status")
 
-        # RIGHT COLUMN: chat + sources (collapsible)
+        # RIGHT chat + sources
         with gr.Column(scale=2):
             chat_display = gr.HTML(label="💬 Chat History", elem_id="chat_display")
 
@@ -308,7 +314,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
                     elem_id="sources_box"
                 )
 
-    # ---------- CHICKEN FRIEND CARDS ----------
+    # ---------- CHICKEN CHARACTER CARDS ----------
     gr.HTML(f"""
     <div class="chicken-card-row">
 
@@ -319,7 +325,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             <h4>Bert</h4>
           </div>
           <div class="card-back">
-            <p><b>Bert</b> loves eating. In the mornings he can be a bit shy, but when the sun is out he really grabs the day!</p>
+            <p><b>Bert</b> loves eating. In the mornings he's shy, but once the sun is out he really grabs the day!</p>
           </div>
         </div>
       </div>
@@ -331,7 +337,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             <h4>Bella</h4>
           </div>
           <div class="card-back">
-            <p><b>Bella</b> is sweet and curious. She likes to explore every corner of the coop and check on her friends.</p>
+            <p><b>Bella</b> is sweet and curious. She explores every corner of the coop.</p>
           </div>
         </div>
       </div>
@@ -343,7 +349,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
             <h4>Nugget</h4>
           </div>
           <div class="card-back">
-            <p><b>Nugget</b> is adventurous (so please close the gate!), but he’s always happy to see you when you visit the coop.</p>
+            <p><b>Nugget</b> is adventurous (please close the gate!) but always happy to see you.</p>
           </div>
         </div>
       </div>
@@ -351,7 +357,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
     </div>
     """)
 
-    # ---------- BUTTON CONNECTION ----------
+    # ---------- BUTTON ACTION ----------
     ask_btn.click(
         rag_answer_for_ui,
         inputs=[question, sensor_choice],
