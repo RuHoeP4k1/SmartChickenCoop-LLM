@@ -23,29 +23,25 @@ vs = vector_store(chunks)
 qa_pipeline = build_QA_pipeline(vs)
 
 
-def rag_answer(user_question, selected_sensor):
-    """Core backend RAG function (no UI formatting)."""
+def rag_answer(user_question, selected_sensor, use_sensors):
+    if use_sensors:
+        sensor_data = load_sensor_file(selected_sensor)
+        sensor_summary = interpret_sensor_data(sensor_data)
+    else:
+        sensor_summary = None
 
-    # 1. Load the selected sensor dataset
-    sensor_data = load_sensor_file(selected_sensor)
-    sensor_summary = interpret_sensor_data(sensor_data)
-
-    # 2. Build the final enriched query
     query = build_query_with_data(sensor_summary, user_question)
 
-    # 3. Run RAG pipeline
     result = qa_pipeline.invoke({"input": query})
-
-    # 4. Extract answer
     answer = result["answer"]
 
-    # 5. Extract sources
     sources_text = ""
     for i, doc in enumerate(result["context"], start=1):
         excerpt = doc.page_content[:150].replace("\n", " ")
         sources_text += f"Source {i}: {doc.metadata.get('source')} — \"{excerpt}...\"\n\n"
 
     return sensor_summary, answer, sources_text
+
 
 
 # ============================================================
@@ -79,24 +75,20 @@ def format_sensor_cards(sensor_summary: str) -> str:
     return html
 
 
-def rag_answer_for_ui(user_question, selected_sensor):
-    """UI wrapper around RAG to handle formatting & chat history."""
+def rag_answer_for_ui(user_question, selected_sensor, use_sensors):
 
-    if not user_question:
-        return gr.update(), gr.update(), gr.update()
+    if use_sensors:
+        sensor_data = load_sensor_file(selected_sensor)
+        sensor_summary = interpret_sensor_data(sensor_data)
+        sensor_cards = format_sensor_cards(sensor_summary)
+    else:
+        sensor_summary = None
+        sensor_cards = "<div style='color:#888;'>Sensor data is disabled.</div>"
 
-    # Sensor interpretation
-    sensor_data = load_sensor_file(selected_sensor)
-    sensor_summary = interpret_sensor_data(sensor_data)
-    sensor_cards = format_sensor_cards(sensor_summary)
+    _, answer, sources = rag_answer(user_question, selected_sensor, use_sensors)
 
-    # RAG backend
-    sensor_raw, answer, sources = rag_answer(user_question, selected_sensor)
+    chat_history.append((user_question, answer))
 
-    # --- Chat history: newest on TOP ---
-    chat_history.insert(0, (user_question, answer))  # prepend newest
-
-    # Build chat HTML (scrollable container via CSS)
     chat_html = "<div style='display:flex; flex-direction:column; gap:10px;'>"
     for user, bot in chat_history:
         chat_html += f"""
@@ -104,12 +96,13 @@ def rag_answer_for_ui(user_question, selected_sensor):
             <b>👤 You:</b> {user}
         </div>
         <div style='background:#E8F5E9; padding:10px; border-radius:8px;'>
-            <b>🐔 ChatKippieT:</b> {bot}
+            <b>🤖 ChatKippieT:</b> {bot}
         </div>
         """
     chat_html += "</div>"
 
     return sensor_cards, chat_html, sources
+
 
 
 # ============================================================
@@ -195,8 +188,7 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
 
         /* Scrollable chat area */
         #chat_display {
-            max-height: 360px;
-            overflow-y: auto;
+            overflow-y: visible;
             padding-right: 8px;
         }
 
@@ -290,22 +282,37 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
 
         # LEFT controls
         with gr.Column(scale=1):
+
+            use_sensors = gr.Checkbox(
+                label="Use Real-Time Sensor Data",
+                value=True
+            )
+
+            sensor_explanation = gr.Markdown(
+                " **Sensor Mode**: When enabled, The system uses real sensor readings in your answers. "
+                "Turn off to ask general chicken-keeping questions without live data."
+            )
+
             sensor_choice = gr.Dropdown(
-                choices=list_sensor_files("Data/sensors"),
-                label="Select Sensor Dataset",
-                value="sensor_data_1.json"
+            choices=list_sensor_files("Data/sensors"),
+            label="Select Sensor Dataset",
+            value="sensor_data_1.json"
             )
+
             question = gr.Textbox(
-                label="Ask a question about your chickens",
-                lines=2,
-                placeholder="Example: Why is my chicken panting?"
+            label="Ask a question about your chickens",
+            lines=2,
+            placeholder="Example: Why is my chicken panting?"
             )
+
             ask_btn = gr.Button("Ask", elem_id="ask_btn")
             sensor_cards_display = gr.HTML(label="📡 Sensor Status")
 
+
+
         # RIGHT chat + sources
         with gr.Column(scale=2):
-            chat_display = gr.HTML(label="💬 Chat History", elem_id="chat_display")
+            chat_display = gr.Markdown(label="💬 Chat History", elem_id="chat_display")
 
             with gr.Accordion("📚 Sources Used", open=False):
                 sources_box = gr.Textbox(
@@ -359,9 +366,9 @@ with gr.Blocks(title="🐔 Chicken Coop Comfort") as demo:
 
     # ---------- BUTTON ACTION ----------
     ask_btn.click(
-        rag_answer_for_ui,
-        inputs=[question, sensor_choice],
-        outputs=[sensor_cards_display, chat_display, sources_box]
-    )
+    rag_answer_for_ui,
+    inputs=[question, sensor_choice, use_sensors],
+    outputs=[sensor_cards_display, chat_display, sources_box]
+)
 
 demo.launch()

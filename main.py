@@ -152,15 +152,16 @@ def build_QA_pipeline(vector_store):
     # 2. LLM - Qwen 2.5:1.5b via Ollama
     llm = OllamaLLM(
         model="qwen2.5:1.5b-instruct",
-        temperature=0.4,
-        num_predict=300
+        temperature=0.7,
+        num_predict=500
     )
 
     # 3. RAG Prompt (promt how the system should behave and what user input and contect is available)
     prompt = ChatPromptTemplate.from_messages([
         ("system",
          "You are a helpful AI assistant. That help users with questions about their chickens. "
-         "Use ONLY the provided document excerpts to answer the question. "
+         "Use the provided document serves as ground truth answer the question, but make sure add relevant context to not cut corners.  "
+         "The user is an amateur chicken keeper, so keep answers simple and easy to understand. and keep in mind the don't have access to advanced tools. or equipment. "
          "answer must have a be suggest clear and actionale advice to the user. do not make eternally long lists. "
          "When making list of observed issues and actions use new lines and bullet points to increase the readablility "
          "If the answer cannot be found in the documents, say so. "),
@@ -267,17 +268,21 @@ def interpret_sensor_data(sensor_data: dict) -> str:
 
 #als none mag die prompt van 'use this sensor data niet in de query
 
-def build_query_with_data(sensor_summary: str, user_question: str) -> str:
-    """
-    Build the final RAG query using a clean,
-    interpreted summary of the sensor data.
-    """
+def build_query_with_data(sensor_summary: str | None, user_question: str) -> str:
+    if sensor_summary is None:
+        return (
+            "Answer the question using only the retrieved knowledge base documents.\n\n"
+            f"Question:\n{user_question}"
+        )
+    
+    # Sensor mode ON
     return (
         "Use the following real-time sensor information from the chicken coop "
         "together with the retrieved documents to answer the question.\n\n"
         f"Sensor status:\n{sensor_summary}\n\n"
         f"Question:\n{user_question}"
     )
+
 
 def answer_with_realtime_data(folder_path: str, json_path: str, user_question: str):
     # 1. Load documents and create vector store
