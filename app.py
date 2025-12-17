@@ -88,21 +88,17 @@ def rag_answer_for_ui(user_question, selected_sensor, use_sensors):
     _, answer, sources = rag_answer(user_question, selected_sensor, use_sensors)
 
     chat_history.append((user_question, answer))
-
-    chat_html = "<div style='display:flex; flex-direction:column; gap:10px;'>"
+    chat_md = ""
+    chat_md = ""
     for user, bot in chat_history:
-        chat_html += f"""
-        <div style='background:#FFF8E7; padding:10px; border-radius:8px;'>
-            <b>👤 You:</b> {user}
-        </div>
-        <div style='background:#E8F5E9; padding:10px; border-radius:8px;'>
-            <b>🤖 ChatKippieT:</b> {bot}
-        </div>
-        """
-    chat_html += "</div>"
-
-    return sensor_cards, chat_html, sources
-
+        chat_md += (
+        "### 👤 You\n"
+        f"{user.strip()}\n\n"
+        "### 🤖 ChatKippieT\n"
+        f"{bot.strip()}\n\n"
+        "---\n\n"
+    )
+    return sensor_cards, chat_md, sources
 
 
 # ============================================================
