@@ -1,108 +1,25 @@
-# ============================================
-# Python / Conda Environments
-# ============================================
+# Environment & secrets
+.env
+
+# Python
 venv/
-.env/
-.venv/
-env/
-*.env
-
-# Conda environment folders (should never be in repo)
-anaconda3/
-miniconda3/
-*/anaconda3/
-*/miniconda3/
-
-
-# ============================================
-# Python Cache & Bytecode
-# ============================================
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.pdb
-*$py.class
 
-
-# ============================================
-# IDE / Editor Files
-# ============================================
-.vscode/
-.idea/
-*.iml
-
-
-# ============================================
-# OS Files
-# ============================================
-.DS_Store
-Thumbs.db
-
-
-# ============================================
-# Project: Chroma Vector Database
-# (VERY IMPORTANT — prevents committing large DB)
-# ============================================
+# Vector database (auto-rebuilt from test_docs/)
 chroma_db/
-chroma_db/*
 
+# Evaluation output
+evaluation/results/
+evaluation_results.json
 
-# ============================================
-# Ollama (local model cache)
-# ============================================
-~/.ollama/
-ollama/
-ollama_models/
-artisan/
-models/
+# Claude Code settings (local only)
+.claude/
 
-
-# ============================================
-# Project Data / Temp Folders
-# ============================================
-Data/*.json
-Data/*.csv
-Data/*.log
-Data/*.tmp
-*.tmp
-
-
-# ============================================
-# Log files
-# ============================================
+# Logs
 *.log
 
-
-# ============================================
-# Jupyter / Notebooks
-# ============================================
-.ipynb_checkpoints/
-
-
-# ============================================
-# Gradio cache / build
-# ============================================
-gradio/
-gradio_cached_examples/
-__gradio_temp__/
-static/
-assets/
-
-
-# ============================================
-# Local test outputs
-# ============================================
-test_output/
-test_results/
-*.test
-*.local
-
-
-# ============================================
-# YAML environments (optional)
-# If you want to track them, remove this block
-# ============================================
-environment.yml
-environment_mac.yml
-environment_windows.yml
+# OS
+.DS_Store
+Thumbs.db
