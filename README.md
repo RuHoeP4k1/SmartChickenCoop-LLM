@@ -37,11 +37,24 @@ Smart sensor integration + hybrid retrieval for chicken welfare advice.
                                                         │                              │
                                                         │  /ask    → RAG pipeline      │
                                                         │  /sensors → latest reading   │
+                                                        │  /sensors/history → trends   │
                                                         │  /events  → event log        │
+                                                        │  /        → React frontend   │
                                                         │                              │
                                                         │  scheduler.py (background)   │
                                                         │  checks sensors periodically │
                                                         │  critical? → triggers RAG    │
+                                                        └──────────────────────────────┘
+                                                                     ^
+                                                                     │ HTTP (port 8000)
+                                                                     v
+                                                        ┌──────────────────────────────┐
+                                                        │  React Web UI (frontend/)    │
+                                                        │                              │
+                                                        │  Chat tab  → /ask            │
+                                                        │  Sensors   → /sensors        │
+                                                        │  + charts  → /sensors/history│
+                                                        │  Alerts    → /events         │
                                                         └──────────────────────────────┘
 ```
 
@@ -178,7 +191,7 @@ This lets us later review: what was asked, what sensor data was active, what the
 ## Files
 
 ```
-├── app.py                    # FastAPI server — /ask, /sensors, /events endpoints
+├── app.py                    # FastAPI server — all API endpoints + serves frontend
 ├── db_utils.py               # PostgreSQL queries (sensor_readings + event_log)
 ├── sensor_filter.py          # Smart context filtering — decides when to include sensors
 ├── prompts.py                # System prompts for LLM (normal, emergency, simple)
@@ -190,6 +203,20 @@ This lets us later review: what was asked, what sensor data was active, what the
 ├── .env.example              # Environment config template (copy to .env)
 ├── test_docs/                # Knowledge base (PDFs, TXTs)
 ├── chroma_db/                # Vector database (auto-created, gitignored)
+├── frontend/                 # React web UI (Vite + Tailwind + Recharts)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ChatPanel.jsx       # Chat tab — Q&A with LLM
+│   │   │   ├── SensorDashboard.jsx # Live sensor cards + history chart
+│   │   │   ├── SensorChart.jsx     # Recharts history chart (1h/24h/7d)
+│   │   │   ├── AlertFeed.jsx       # Event log with expandable cards
+│   │   │   └── Layout.jsx          # Top nav + tab switching
+│   │   ├── api/index.js            # All fetch() calls centralised here
+│   │   ├── App.jsx                 # Root component with tab state
+│   │   └── main.jsx                # React entry point
+│   ├── package.json
+│   ├── vite.config.js              # Proxies /ask /sensors /events → :8000 in dev
+│   └── dist/                       # Production build (gitignored, run npm run build)
 └── evaluation/               # RAG evaluation scripts
     ├── evaluate_rag.py       # RAG vs NO-RAG heuristic comparison
     ├── evaluate_ragas.py     # RAGAS semantic evaluation
@@ -242,12 +269,26 @@ cp /path/to/your/pdfs/*.pdf test_docs/
 python rag_functions.py
 ```
 
-### 6. Run the API Server
+### 6. Build the Frontend
+
+```bash
+# Requires Node.js 18+ — download from https://nodejs.org
+cd frontend
+npm install
+npm run build    # outputs to frontend/dist/
+cd ..
+```
+
+### 7. Run the API Server
 
 ```bash
 uvicorn app:app --reload
+# Opens full UI at http://localhost:8000
 # API docs at http://localhost:8000/docs
 ```
+
+> **Dev mode (frontend hot-reload):** run `uvicorn app:app` in one terminal and
+> `cd frontend && npm run dev` in another. The Vite dev server proxies API calls to `:8000`.
 
 ---
 
@@ -297,10 +338,12 @@ Better Results (evaluated via evaluate_rag.py — RAG vs NO-RAG)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/` | API info + endpoint listing |
+| GET | `/` | Serves React frontend (production build) |
+| GET | `/api/info` | API info + endpoint listing (JSON) |
 | GET | `/health` | Health check |
 | POST | `/ask` | Ask a question (RAG pipeline) |
 | GET | `/sensors` | Latest sensor reading |
+| GET | `/sensors/history` | Historical readings (`?range=1h\|24h\|7d`) |
 | GET | `/events` | Event log (LLM responses + sensor alerts) |
 | POST | `/setup-db` | Create database tables |
 
@@ -321,8 +364,23 @@ DB_PASSWORD=your_password
 ### Scheduler Interval
 
 ```
-SCHEDULER_INTERVAL=900    # seconds (default 15 min)
+SCHEDULER_INTERVAL=60    # seconds (default 60 s)
 ```
+
+### Simulation Mode
+
+When the Raspberry Pi is not yet available, set `SIMULATION_MODE=true` to have the
+server insert a synthetic sensor reading every 60 seconds — allowing you to test the
+full pipeline (alerts, RAG advice, event log, charts) without real hardware.
+
+```
+SIMULATION_MODE=true     # fake Pi readings every 60 s
+SIMULATION_MODE=false    # (default) live mode — only real Pi data
+```
+
+Scenario follows the time of day (cool night → normal morning → warm midday → hot/critical
+afternoon), with an ~8 % random chance of resource_low regardless of hour.
+To switch back to live mode: set `SIMULATION_MODE=false` (or remove it) and restart uvicorn.
 
 ### LLM Model
 

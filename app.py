@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
@@ -18,6 +19,7 @@ from rag_functions import (
 from db_utils import (
     get_latest_sensor_reading, setup_database,
     get_recent_readings, get_recent_events, insert_event,
+    get_sensor_history,
 )
 from sensor_filter import get_sensor_context
 from scheduler import start_scheduler, stop_scheduler
@@ -39,7 +41,8 @@ class AppState:
 state = AppState()
 
 KNOWLEDGE_BASE_PATH = os.getenv("KNOWLEDGE_BASE_PATH", "test_docs")
-SCHEDULER_INTERVAL = int(os.getenv("SCHEDULER_INTERVAL", "900"))  # seconds (15 min)
+SCHEDULER_INTERVAL  = int(os.getenv("SCHEDULER_INTERVAL", "60"))   # seconds
+SIMULATION_MODE     = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 
 
 @asynccontextmanager
@@ -64,7 +67,10 @@ async def lifespan(app: FastAPI):
             interval_seconds=SCHEDULER_INTERVAL,
             vectordb=state.vectordb,
             bm25_retriever=state.bm25_retriever,
+            simulation_mode=SIMULATION_MODE,
         )
+        if SIMULATION_MODE:
+            logger.info("SIMULATION MODE ON — fake readings every 60 s, scheduler every %ds", SCHEDULER_INTERVAL)
     except Exception as e:
         logger.warning(f"Scheduler failed to start (DB might not be ready): {e}")
 
@@ -115,9 +121,9 @@ class QueryResponse(BaseModel):
 # Core endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/")
+@app.get("/api/info")
 def root():
-    """Root endpoint with API info."""
+    """API info endpoint (moved from / to avoid conflicting with the React frontend)."""
     return {
         "app": "ChickenCare AI",
         "version": "1.2.0",
@@ -230,3 +236,38 @@ def get_events(
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
     return {"events": events, "count": len(events)}
+
+
+# ---------------------------------------------------------------------------
+# Sensor history endpoint — for the frontend chart
+# ---------------------------------------------------------------------------
+
+@app.get("/sensors/history")
+def get_history(
+    range: str = Query("1h", description="Time range: 1h, 24h, 7d"),
+):
+    """
+    Return sensor readings for the past 1h / 24h / 7d.
+    Used by the frontend chart to plot historical trends.
+    """
+    range_hours = {"1h": 1, "24h": 24, "7d": 168}
+    range_limit = {"1h": 120, "24h": 300, "7d": 500}
+
+    hours = range_hours.get(range, 1)
+    limit = range_limit.get(range, 120)
+
+    try:
+        readings = get_sensor_history(hours=hours, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+
+    return {"readings": readings, "range": range, "count": len(readings)}
+
+
+# ---------------------------------------------------------------------------
+# Serve the React frontend (must be LAST — after all API routes)
+# Only active once you've run `npm run build` inside frontend/
+# ---------------------------------------------------------------------------
+
+if os.path.exists("frontend/dist"):
+    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")

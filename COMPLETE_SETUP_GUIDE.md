@@ -82,7 +82,27 @@ ollama pull nomic-embed-text
 
 ---
 
-## Step 4: Setup Python Environment
+## Step 4: Install Node.js (for the Web UI)
+
+### Windows / Mac:
+```bash
+# Download the LTS installer from: https://nodejs.org
+# Run installer — default settings are fine
+
+# Verify:
+node --version   # should show v18 or higher
+npm --version
+```
+
+### Linux (Ubuntu):
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+---
+
+## Step 4b: Setup Python Environment
 
 ```bash
 # Navigate to your project folder
@@ -103,7 +123,7 @@ source venv/bin/activate
 
 ---
 
-## Step 5: Install Python Dependencies
+## Step 5: Install Python + Frontend Dependencies
 
 ```bash
 # Make sure venv is activated!
@@ -116,6 +136,11 @@ pip install -r requirements.txt
 # - fastapi (API server)
 
 # Should take 2-3 minutes
+
+# Install frontend dependencies
+cd frontend
+npm install
+cd ..
 ```
 
 ---
@@ -173,7 +198,22 @@ python generate_demo_data.py
 
 ---
 
-## Step 9: Test the RAG Pipeline
+## Step 9: Build the Web UI
+
+```bash
+cd frontend
+npm run build
+# Outputs production files to frontend/dist/
+# FastAPI will serve these automatically on http://localhost:8000
+cd ..
+```
+
+> **Dev mode (optional):** run `npm run dev` instead to get Vite hot-reload
+> while developing the UI. API calls are proxied to FastAPI on port 8000.
+
+---
+
+## Step 10: Test the RAG Pipeline
 
 ```bash
 python rag_functions.py
@@ -189,7 +229,7 @@ python rag_functions.py
 
 ---
 
-## Step 10: Run Evaluation (RAG vs NO-RAG)
+## Step 11: Run Evaluation (RAG vs NO-RAG)
 
 ```bash
 python evaluation/evaluate_rag.py
@@ -200,7 +240,7 @@ python evaluation/evaluate_rag.py
 
 ---
 
-## Step 11: Test Pi Sensor Writer
+## Step 12: Test Pi Sensor Writer
 
 ```bash
 python pi_sensor_writer.py
@@ -227,10 +267,44 @@ You're good to go. Use send_reading() in your sensor loop.
 ## Quick Reference Commands
 
 ```bash
+# ── Frontend ──────────────────────────────────────────────────────
+# Build for production (required before uvicorn serves the UI)
+cd frontend && npm run build && cd ..
+
+# Dev mode — Vite hot-reload (open http://localhost:5173)
+# Run in a separate terminal while uvicorn is running
+cd frontend && npm run dev
+
+# ── Backend ───────────────────────────────────────────────────────
+# Start the API + serve the built frontend
+uvicorn app:app --reload
+# → open http://localhost:8000
+
+# ── Database ──────────────────────────────────────────────────────
 # Generate new demo data
 python generate_demo_data.py
 
+# Check latest sensor reading
+python -c "from db_utils import get_latest_sensor_reading; print(get_latest_sensor_reading())"
+
+# Reset all sensor + event data (keeps tables)
+python -c "
+import psycopg2, os
+from dotenv import load_dotenv
+load_dotenv()
+conn = psycopg2.connect(host=os.getenv('DB_HOST'), dbname=os.getenv('DB_NAME'),
+                        user=os.getenv('DB_USER'), password=os.getenv('DB_PASSWORD'))
+conn.autocommit = True
+conn.cursor().execute('TRUNCATE sensor_readings, event_log RESTART IDENTITY')
+print('Done')
+"
+
+# ── RAG ───────────────────────────────────────────────────────────
 # Test RAG pipeline
+python rag_functions.py
+
+# Rebuild vector database (after adding new documents)
+rm -rf chroma_db/      # Windows: rmdir /s /q chroma_db
 python rag_functions.py
 
 # Run evaluation
@@ -238,17 +312,61 @@ python evaluation/evaluate_rag.py
 
 # Test Pi sensor writer
 python pi_sensor_writer.py
-
-# Check latest sensor reading
-python -c "from db_utils import get_latest_sensor_reading; print(get_latest_sensor_reading())"
-
-# Rebuild vector database (if you add new documents)
-rm -rf chroma_db/  # Windows: rmdir /s chroma_db
-python rag_functions.py
-
-# Start the API server
-uvicorn app:app --reload
 ```
+
+---
+
+## Simulation Mode (Testing Without a Pi)
+
+When the Raspberry Pi is not yet available you can run the full system end-to-end using
+**simulation mode**. The server will insert one synthetic sensor reading every 60 seconds,
+the scheduler will check it and fire alerts/RAG advice as normal, and the UI charts will
+update automatically.
+
+### Enable
+
+Add one line to your `.env` file:
+
+```
+SIMULATION_MODE=true
+```
+
+Then restart uvicorn. You'll see this in the logs:
+```
+SIMULATION MODE ON — fake readings every 60 s, scheduler every 60s
+```
+
+### What you can test
+
+| Feature | How to observe |
+|---------|---------------|
+| Live sensor cards updating | Sensors tab — values change every ~60 s |
+| Historical charts filling in | Chart auto-refreshes; switch 1h / 24h / 7d |
+| Automatic critical alert + RAG advice | Wait a few minutes — a "critical" reading will trigger and appear in the Alerts tab |
+| Conditions-normal log entry | After a critical clears, scheduler logs "All Clear" |
+| Q&A with active sensor context | Ask "Is it too hot?" during a hot/critical period |
+
+### Scenario schedule
+
+Readings follow the **time of day** (same pattern as the chicken coop's real environment):
+
+| Time | Scenario |
+|------|---------|
+| 22:00 – 06:00 | `cold_night` — temp warning, humidity normal |
+| 06:00 – 10:00 | `normal` — all readings normal |
+| 10:00 – 14:00 | `hot_day` — temp + humidity warning |
+| 14:00 – 16:00 | `hot_day` or `critical` (random) — potential critical alert |
+| 16:00 – 20:00 | `hot_day` — cooling down |
+| 20:00 – 22:00 | `normal` |
+| any time (~8%) | `resource_low` — feeder/waterer low |
+
+### Disable (switch to live Pi mode)
+
+```
+SIMULATION_MODE=false   # or delete the line entirely
+```
+
+Restart uvicorn — nothing else changes. The Pi data will appear as normal.
 
 ---
 
@@ -259,8 +377,8 @@ uvicorn app:app --reload
 **Fix:**
 1. Check PostgreSQL is running:
    ```bash
-   # Windows
-   net start postgresql-x64-16
+   # Windows (adjust version number to match your install, e.g. 16, 17, 18)
+   net start postgresql-x64-18
 
    # Mac
    brew services list | grep postgresql
@@ -329,6 +447,24 @@ your-project/
 ├── chroma_db/                     # Vector database (auto-created, gitignored)
 ├── test_docs/                     # Your knowledge base
 │   └── chicken_basics.txt
+├── frontend/                      # React web UI
+│   ├── node_modules/              # JS deps (gitignored — run npm install)
+│   ├── dist/                      # Production build (gitignored — run npm run build)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ChatPanel.jsx
+│   │   │   ├── SensorDashboard.jsx
+│   │   │   ├── SensorChart.jsx
+│   │   │   ├── AlertFeed.jsx
+│   │   │   └── Layout.jsx
+│   │   ├── api/index.js
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── tailwind.config.js
+│   └── postcss.config.js
 ├── evaluation/                    # RAG evaluation scripts
 │   ├── evaluate_rag.py            # RAG vs NO-RAG heuristic comparison
 │   ├── evaluate_ragas.py          # RAGAS semantic evaluation
@@ -346,7 +482,7 @@ your-project/
 ├── pi_sensor_writer.py            # Template for Pi sensor team to write data
 ├── generate_demo_data.py          # Create test sensor readings
 ├── scheduler.py                   # Background sensor monitoring + alerts
-├── app.py                         # FastAPI server
+├── app.py                         # FastAPI server + serves frontend/dist
 ├── requirements.txt               # Python dependencies
 ├── README.md                      # Project overview and documentation
 └── COMPLETE_SETUP_GUIDE.md        # This file
@@ -377,15 +513,19 @@ your-project/
 
 ## Checklist
 
-- [ ] PostgreSQL installed and running
+- [ ] PostgreSQL installed and running (`net start postgresql-x64-18` on Windows)
 - [ ] Database `chickens` created
-- [ ] Ollama installed with both models
+- [ ] Ollama installed with both models (`qwen2.5:1.5b-instruct` + `nomic-embed-text`)
+- [ ] Node.js 18+ installed (`node --version` to verify)
 - [ ] Python venv created and activated
-- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] Python dependencies installed (`pip install -r requirements.txt`)
+- [ ] Frontend dependencies installed (`cd frontend && npm install`)
 - [ ] `.env` configured with DB credentials
 - [ ] `test_docs/` folder created with at least 1 file
-- [ ] Demo data generated successfully
-- [ ] RAG pipeline runs without errors
+- [ ] Demo data generated successfully (`python generate_demo_data.py`)
+- [ ] Frontend built (`cd frontend && npm run build`)
+- [ ] RAG pipeline runs without errors (`python rag_functions.py`)
+- [ ] Server starts and UI loads at http://localhost:8000
 - [ ] Evaluation completes successfully
 
 ---

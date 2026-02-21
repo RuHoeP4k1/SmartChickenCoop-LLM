@@ -14,11 +14,12 @@ Designed to run inside the FastAPI app (not standalone).
 """
 
 import logging
+import random
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from db_utils import get_latest_sensor_reading, insert_event
+from db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading
 from sensor_filter import get_sensor_context, get_critical_alerts, is_reading_stale
 from rag_functions import answer_query
 
@@ -91,7 +92,7 @@ def check_sensors():
 
     # Run RAG to generate actionable advice
     if _vectordb is not None and _bm25_retriever is not None:
-        query = "Critical coop conditions detected: " + "; ".join(critical_alerts)
+        query = "ALERT: " + "; ".join(critical_alerts) + ". What must I do right now to protect my flock?"
 
         try:
             result = answer_query(
@@ -124,13 +125,101 @@ def check_sensors():
 
 
 # ---------------------------------------------------------------------------
+# Simulation mode — inserts a fake reading every 60 s
+# Enabled by SIMULATION_MODE=true in .env  (switch off → set to false + restart)
+# ---------------------------------------------------------------------------
+
+_SIM_SCENARIOS = {
+    "normal": {
+        "temperature_c": lambda: random.uniform(20, 24),
+        "temperature_status": "normal",
+        "humidity_pct": lambda: random.uniform(50, 70),
+        "humidity_status": "normal",
+        "heat_stress_index": "normal",
+        "feeder_status": "full",
+        "waterer_status": "full",
+    },
+    "hot_day": {
+        "temperature_c": lambda: random.uniform(28, 32),
+        "temperature_status": "warning",
+        "humidity_pct": lambda: random.uniform(65, 80),
+        "humidity_status": "warning",
+        "heat_stress_index": "warning",
+        "feeder_status": lambda: random.choice(["full", "full", "low"]),
+        "waterer_status": lambda: random.choice(["full", "low"]),
+    },
+    "critical": {
+        "temperature_c": lambda: random.uniform(35, 38),
+        "temperature_status": "critical",
+        "humidity_pct": lambda: random.uniform(80, 90),
+        "humidity_status": "critical",
+        "heat_stress_index": "critical",
+        "feeder_status": lambda: random.choice(["low", "empty"]),
+        "waterer_status": lambda: random.choice(["low", "empty"]),
+    },
+    "cold_night": {
+        "temperature_c": lambda: random.uniform(8, 14),
+        "temperature_status": "warning",
+        "humidity_pct": lambda: random.uniform(60, 75),
+        "humidity_status": "normal",
+        "heat_stress_index": "normal",
+        "feeder_status": "full",
+        "waterer_status": "full",
+    },
+    "resource_low": {
+        "temperature_c": lambda: random.uniform(20, 24),
+        "temperature_status": "normal",
+        "humidity_pct": lambda: random.uniform(50, 65),
+        "humidity_status": "normal",
+        "heat_stress_index": "normal",
+        "feeder_status": "low",
+        "waterer_status": "low",
+    },
+}
+
+
+def _resolve(val):
+    return val() if callable(val) else val
+
+
+def _sim_insert_reading():
+    """
+    Simulation mode: insert one synthetic sensor reading.
+    Scenario follows a realistic daily temperature pattern.
+    """
+    hour = datetime.now().hour
+    if 6 <= hour < 10:
+        scenario = "normal"
+    elif 10 <= hour < 14:
+        scenario = "hot_day"
+    elif 14 <= hour < 16:
+        scenario = random.choice(["hot_day", "critical"])
+    elif 16 <= hour < 20:
+        scenario = "hot_day"
+    elif 20 <= hour < 22:
+        scenario = "normal"
+    else:
+        scenario = "cold_night"
+    if random.random() < 0.08:
+        scenario = "resource_low"
+
+    reading = {k: _resolve(v) for k, v in _SIM_SCENARIOS[scenario].items()}
+    try:
+        insert_sensor_reading(reading)
+        logger.debug(f"Sim: inserted '{scenario}' reading")
+    except Exception as e:
+        logger.error(f"Sim: failed to insert reading: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Scheduler lifecycle (called from app.py lifespan)
 # ---------------------------------------------------------------------------
 
 _scheduler = None
 
 
-def start_scheduler(interval_seconds: int = 60 * 15, vectordb=None, bm25_retriever=None):
+def start_scheduler(interval_seconds: int = 60, vectordb=None, bm25_retriever=None,
+                    simulation_mode: bool = False):
     """
     Start the background scheduler.
 
@@ -157,8 +246,18 @@ def start_scheduler(interval_seconds: int = 60 * 15, vectordb=None, bm25_retriev
         replace_existing=True,
         next_run_time=datetime.now(),  # run once immediately on startup
     )
+    if simulation_mode:
+        _scheduler.add_job(
+            _sim_insert_reading,
+            trigger=IntervalTrigger(seconds=60),
+            id="sim_sensor",
+            name="Simulation: insert fake reading every 60 s",
+            replace_existing=True,
+        )
+
     _scheduler.start()
-    logger.info(f"Scheduler started (interval={interval_seconds}s, rag={'yes' if vectordb else 'no'})")
+    mode = "SIMULATION" if simulation_mode else "live"
+    logger.info(f"Scheduler started ({mode}, check={interval_seconds}s, rag={'yes' if vectordb else 'no'})")
 
 
 def stop_scheduler():

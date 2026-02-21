@@ -119,6 +119,40 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
         release_db_connection(conn)
 
 
+def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
+    """
+    Get sensor readings from the past N hours, oldest first.
+    Used by the frontend chart to show historical trends.
+
+    Args:
+        hours: How many hours back to query
+        limit: Max rows to return (server-side downsampling)
+
+    Returns:
+        List of sensor reading dicts ordered by timestamp ASC
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        since = datetime.now() - timedelta(hours=hours)
+        cursor.execute(
+            """
+            SELECT timestamp, temperature_c, temperature_status,
+                   humidity_pct, humidity_status, heat_stress_index
+            FROM sensor_readings
+            WHERE timestamp >= %s
+            ORDER BY timestamp ASC
+            LIMIT %s
+            """,
+            (since, limit),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return [dict(r) for r in rows]
+    finally:
+        release_db_connection(conn)
+
+
 def insert_sensor_reading(sensor_data: Dict) -> int:
     """
     Insert a new sensor reading into the database.

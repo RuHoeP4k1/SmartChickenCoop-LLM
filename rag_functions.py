@@ -311,7 +311,10 @@ def hybrid_search(
         search_type="mmr",
         search_kwargs={"k": k, "fetch_k": k*3}
     )
-    
+
+    # Sync BM25 k to match the requested k
+    bm25_retriever.k = k
+
     # Combine both retrievers
     # 60% weight to semantic, 40% to keyword
     ensemble_retriever = EnsembleRetriever(
@@ -327,41 +330,21 @@ def hybrid_search(
 # LLM RESPONSE GENERATION
 # =============================================================================
 
-def format_context(documents: List, max_chars: int = 600) -> str:
+def format_context(documents: List) -> str:
     """
     Format retrieved documents into context string for LLM.
-    Truncates at the nearest sentence boundary to avoid broken context.
 
     Args:
         documents: List of retrieved documents
-        max_chars: Max characters per document chunk
 
     Returns:
         Formatted context string
     """
     context_parts = []
-
     for i, doc in enumerate(documents, 1):
         source = doc.metadata.get('source', 'Unknown')
         content = doc.page_content
-        if len(content) > max_chars:
-            # Find the last sentence boundary before the limit
-            truncated = content[:max_chars]
-            # Look for last period, question mark, or exclamation followed by space
-            last_sentence = max(
-                truncated.rfind('. '),
-                truncated.rfind('? '),
-                truncated.rfind('! '),
-                truncated.rfind('.\n'),
-            )
-            if last_sentence > max_chars // 2:
-                # Only use sentence boundary if it's in the second half
-                # (otherwise we'd lose too much content)
-                content = truncated[:last_sentence + 1]
-            else:
-                content = truncated
-        context_parts.append(content)
-
+        context_parts.append(f"[Source {i}: {source}]\n{content}\n")
     return "\n".join(context_parts)
 
 
@@ -390,7 +373,8 @@ def answer_query(
     vectordb: Chroma,
     bm25_retriever: BM25Retriever,
     use_sensors: bool = True,
-    use_hybrid: bool = True
+    use_hybrid: bool = True,
+    k: int = 5
 ) -> Dict:
     """
     Complete RAG pipeline to answer a query.
@@ -424,10 +408,10 @@ def answer_query(
     
     # Step 2: Retrieve relevant documents
     if use_hybrid:
-        documents = hybrid_search(vectordb, bm25_retriever, query, k=3)
+        documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
         retrieval_method = "hybrid"
     else:
-        documents = semantic_search(vectordb, query, k=3)
+        documents = semantic_search(vectordb, query, k=k)
         retrieval_method = "semantic"
     
     # Step 3: Format context

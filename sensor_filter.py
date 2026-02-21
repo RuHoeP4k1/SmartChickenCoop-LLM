@@ -141,7 +141,7 @@ def get_sensor_context(sensor_data: Dict) -> str:
         # Less scary wording
         status_text = "High" if temp_status == "critical" else "Elevated"
         alerts.append(
-            f"🌡️ Temperature: {temp_c}°C ({status_text})"
+            f"🌡️ Temperature: {temp_c:.2f}°C ({status_text})"
         )
     
     # Humidity (sensor team labels this)
@@ -150,7 +150,7 @@ def get_sensor_context(sensor_data: Dict) -> str:
         humidity_pct = sensor_data.get("humidity_pct")
         status_text = "High" if humidity_status == "critical" else "Elevated"
         alerts.append(
-            f"💧 Humidity: {humidity_pct}% ({status_text})"
+            f"💧 Humidity: {humidity_pct:.2f}% ({status_text})"
         )
     
     # Heat stress (composite indicator from sensor team)
@@ -201,12 +201,12 @@ def get_critical_alerts(sensor_data: Dict) -> list:
     # Check each parameter (using sensor team's labels)
     if sensor_data.get("temperature_status") == "critical":
         critical.append(
-            f"High temperature detected: {sensor_data.get('temperature_c')}°C"
+            f"High temperature detected: {sensor_data.get('temperature_c', 0):.2f}°C"
         )
     
     if sensor_data.get("humidity_status") == "critical":
         critical.append(
-            f"High humidity detected: {sensor_data.get('humidity_pct')}%"
+            f"High humidity detected: {sensor_data.get('humidity_pct', 0):.2f}%"
         )
     
     if sensor_data.get("heat_stress_index") == "critical":

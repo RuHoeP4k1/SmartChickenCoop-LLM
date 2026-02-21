@@ -14,6 +14,10 @@ chroma_db/
 evaluation/results/
 evaluation_results.json
 
+# Frontend dependencies & build output
+frontend/node_modules/
+frontend/dist/
+
 # Claude Code settings (local only)
 .claude/
 
