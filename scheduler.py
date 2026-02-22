@@ -200,7 +200,10 @@ def _sim_insert_reading():
         scenario = "normal"
     else:
         scenario = "cold_night"
-    if random.random() < 0.08:
+    r = random.random()
+    if r < 0.20:
+        scenario = "critical"
+    elif r < 0.30:
         scenario = "resource_low"
 
     reading = {k: _resolve(v) for k, v in _SIM_SCENARIOS[scenario].items()}

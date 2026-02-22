@@ -11,7 +11,7 @@ import { getHistory } from '../api'
 // ---------------------------------------------------------------------------
 const METRICS = [
   { key: 'temperature_c', label: 'Temperature', unit: '°C', color: '#f97316', domain: ['auto', 'auto'] },
-  { key: 'humidity_pct',  label: 'Humidity',    unit: '%',  color: '#38bdf8', domain: [0, 100]         },
+  { key: 'humidity_pct',  label: 'Humidity',    unit: '%',  color: '#0891b2', domain: [0, 100]         },
 ]
 
 const RANGES = [
@@ -26,8 +26,8 @@ const RANGES = [
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 shadow-xl text-xs">
-      <p className="text-slate-400 mb-2">
+    <div className="bg-white border border-stone-200 rounded-xl px-3 py-2.5 shadow-lg text-xs">
+      <p className="text-stone-400 mb-2">
         {new Date(label).toLocaleString([], {
           month: 'short', day: 'numeric',
           hour: '2-digit', minute: '2-digit',
@@ -38,7 +38,7 @@ function ChartTooltip({ active, payload, label }) {
         return (
           <div key={p.dataKey} className="flex items-center gap-2 mb-0.5">
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
-            <span className="text-slate-400">{metric?.label ?? p.dataKey}:</span>
+            <span className="text-stone-500">{metric?.label ?? p.dataKey}:</span>
             <span className="font-semibold" style={{ color: p.color }}>
               {Number(p.value).toFixed(2)}{metric?.unit ?? ''}
             </span>
@@ -119,19 +119,19 @@ export default function SensorChart() {
   const xDomain = [Date.now() - (RANGE_MS[range] ?? RANGE_MS['1h']), Date.now()]
 
   return (
-    <div className="bg-slate-800/40 border border-slate-700 rounded-2xl p-5">
+    <div className="bg-white border border-stone-200 rounded-2xl p-5 mt-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
-          <h3 className="text-sm font-semibold text-white">Historical Trends</h3>
+          <h3 className="text-sm font-semibold text-stone-800">Historical Trends</h3>
           {!loading && (
-            <p className="text-xs text-slate-500 mt-0.5">{data.length} readings</p>
+            <p className="text-xs text-stone-400 mt-0.5">{data.length} readings</p>
           )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Metric picker */}
-          <div className="flex gap-1 bg-slate-900/60 rounded-lg p-1">
+          <div className="flex gap-1 bg-stone-100 rounded-lg p-1 border border-stone-200">
             {METRICS.map(m => {
               const isActive = selected.includes(m.key)
               return (
@@ -140,12 +140,12 @@ export default function SensorChart() {
                   onClick={() => toggleMetric(m.key)}
                   title={isActive ? 'Click to deselect' : selected.length === 2 ? 'Click to swap oldest' : 'Click to add'}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    isActive ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'
+                    isActive ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-400 hover:text-stone-600'
                   }`}
                 >
                   <span
                     className="w-2 h-2 rounded-full shrink-0 transition-colors"
-                    style={{ background: isActive ? m.color : '#475569' }}
+                    style={{ background: isActive ? m.color : '#d6d3d1' }}
                   />
                   {m.label}
                 </button>
@@ -154,15 +154,15 @@ export default function SensorChart() {
           </div>
 
           {/* Range selector */}
-          <div className="flex gap-1 bg-slate-900/60 rounded-lg p-1">
+          <div className="flex gap-1 bg-stone-100 rounded-lg p-1 border border-stone-200">
             {RANGES.map(r => (
               <button
                 key={r.value}
                 onClick={() => setRange(r.value)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   range === r.value
-                    ? 'bg-green-700/50 text-green-300'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-amber-100 text-amber-700 border border-amber-300'
+                    : 'text-stone-400 hover:text-stone-700'
                 }`}
               >
                 {r.label}
@@ -174,17 +174,17 @@ export default function SensorChart() {
 
       {/* Chart area */}
       {loading && (
-        <div className="flex items-center justify-center h-56 text-slate-500 text-sm">
+        <div className="flex items-center justify-center h-56 text-stone-400 text-sm">
           Loading…
         </div>
       )}
       {error && (
-        <div className="flex items-center justify-center h-56 text-red-400 text-sm">
+        <div className="flex items-center justify-center h-56 text-red-500 text-sm">
           {error}
         </div>
       )}
       {!loading && !error && data.length === 0 && (
-        <div className="flex items-center justify-center h-56 text-slate-600 text-sm">
+        <div className="flex items-center justify-center h-56 text-stone-400 text-sm">
           No readings in the past {range}.
         </div>
       )}
@@ -195,7 +195,7 @@ export default function SensorChart() {
             data={data}
             margin={{ top: 4, right: showDual ? 12 : 4, bottom: 4, left: 4 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false} />
 
             <XAxis
               dataKey="timestamp"
@@ -203,8 +203,8 @@ export default function SensorChart() {
               scale="time"
               domain={xDomain}
               tickFormatter={ts => formatTick(ts, range)}
-              tick={{ fill: '#64748b', fontSize: 11 }}
-              axisLine={{ stroke: '#334155' }}
+              tick={{ fill: '#78716c', fontSize: 11 }}
+              axisLine={{ stroke: '#d6d3d1' }}
               tickLine={false}
               minTickGap={50}
             />

@@ -5,7 +5,7 @@ import SensorDashboard from './components/SensorDashboard'
 import AlertFeed from './components/AlertFeed'
 
 const TABS = [
-  { id: 'chat',    label: 'Ask ChickenGuard' },
+  { id: 'chat',    label: 'Ask ChatKippieTee' },
   { id: 'sensors', label: 'Live Sensors' },
   { id: 'alerts',  label: 'Alert Feed' },
 ]
