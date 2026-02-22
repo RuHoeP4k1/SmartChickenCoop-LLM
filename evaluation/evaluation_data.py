@@ -14,29 +14,40 @@ TEST_CASES = [
     {
         "question": "What temperature is dangerous for chickens?",
         "category": "environment",
-        "expected_topics": ["temperature", "heat stress", "cooling"],  # review against test_docs/
-        "ground_truth": "FILL_IN",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
+        "expected_topics": ["temperature", "heat stress", "temperature-humidity index (THI)", "thermoneutral zone", "danger"],  # review against test_docs/
+        "ground_truth": "Chickens perform best in their thermoneutral zone of 19–22 °C. Temperatures above this range will trigger heat stress"
+                        "Lower performances are noticeable between 30-32°C, higher temperatures are thus considered dangerous "
+                        "The temperature-humidity index (THI) classifies conditions as danger at 76–81 and emergency above 81, meaning the birds are at serious thermal risk"
+                        "Practically, when the temperature inside the coop approaches 30°C (90°F): provide shade, cool water and ventilation to cool the chickens. ",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
         #   Write 2-5 sentences: what temperature is dangerous? what are the signs?
         #   what should the keeper do? Use numbers from your actual documents.
     },
     {
         "question": "How often do chickens lay eggs?",
         "category": "general",
-        "expected_topics": ["eggs", "laying", "frequency"],  # review against test_docs/
-        "ground_truth": "FILL_IN",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
+        "expected_topics": ["egg", "laying", "heat stress", "sexual maturity"],  # review against test_docs/
+        "ground_truth": "Most laying hens will produce about one egg per day once they reach sexual maturity, especially if they are breeds selected for egg production."
+                        "However, egg laying naturally declines with age and can be reduced by heat stress, which negatively affects egg production."
+                        "For keepers, this means you can expect near-daily eggs from healthy hens in good conditions, but ensure proper housing, cooling, and nutrition to maintain consistent production.",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
         #   Write 2-5 sentences about typical laying frequency and what influences it.
     },
     {
         "question": "My chicken is limping, what should I do?",
         "category": "health",
-        "expected_topics": ["injury", "vet", "leg"],  # review against test_docs/
-        "ground_truth": "FILL_IN",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
+        "expected_topics": ["arthritis", "vet", "leg", "isolate"],  # review against test_docs/
+        "ground_truth": "If your chicken is limping, first isolate her and check the legs and feet for swelling, warmth, redness, deformities, or a black scab on the foot pad (possible bumblefoot)."
+                        "Swollen, hot joints may indicate arthritis, veterinary advice is recommended."
+                        "Provide easy access to feed and water and low perches to reduce strain while you assess the injury."
+                        "Keep bedding clean and dry, as damp or dirty litter can worsen joint infections and leg problems.",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
     },
     {
         "question": "What causes chickens to peck each other?",
         "category": "behavior",
-        "expected_topics": ["pecking", "aggression", "stress"],  # review against test_docs/
-        "ground_truth": "FILL_IN",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
+        "expected_topics": ["pecking", "light", "stress", "overcrowding"],  # review against test_docs/
+        "ground_truth": "Chickens often start pecking due to stress factors such as overcrowding, high stocking density, or uneven access to resources, which increase social conflict and group stress."
+                        "High light intensity or constant light can also worsen injurious pecking behavior."
+                        "Once a bird has a wound or prolapse, the red, inflamed tissue attracts more pecking and can create a vicious cycle."
+                        "To prevent this, provide enough space, reduce light intensity, manage flock weight properly, and cull birds that persistently cannibalize others.",  # 👈 TEAMMATE FILLS THIS — read test_docs/ first
     },
     {
         "question": "How much space do chickens need?",
