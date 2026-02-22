@@ -28,15 +28,24 @@ You do NOT need to write code here. Just fill in the text between the triple quo
 # ---------------------------------------------------------------------------
 
 ACTIONABILITY_CRITERIA = """
-FILL IN YOUR SCORING DESCRIPTION HERE.
 
-Describe:
-- Score 1: What does a completely non-actionable answer look like?
-- Score 3: What does a partially actionable answer look like?
-- Score 5: What does a perfectly actionable answer look like?
+Score 1 (Not actionable):
+- Mostly generic explanations (“could be stress”, “check their diet”) with no clear next steps.
+- No order of actions, no specifics (what to check, how to do it), and no “when to get help” guidance.
+- Leaves a beginner unsure what to do today.
 
-Focus on: can a chicken keeper with no vet training follow this immediately?
+Score 2 (Somewhat actionable):
+- Gives a few concrete actions (e.g., isolate the bird, refresh water, clean coop), but steps are incomplete or not prioritized.
+- Missing key practical details (how long to observe, what signs to watch for, what “clean” means).
+- Some guidance is usable, but the user still has to guess.
+
+Score 3 (Highly actionable):
+- Clear, beginner-friendly checklist in a sensible order (do this first, then this).
+- Includes simple, doable details (what to look for, basic hygiene steps, how to monitor, how long to wait).
+- States clear “red flags” and when to contact a vet/experienced keeper immediately.
+- Uses plain language and focuses on actions a hobby keeper can realistically do.
 """
+
 # 👆 Replace everything between the triple quotes, keeping the variable name.
 
 
@@ -57,13 +66,22 @@ Focus on: can a chicken keeper with no vet training follow this immediately?
 # ---------------------------------------------------------------------------
 
 CORRECTNESS_CRITERIA = """
-FILL IN YOUR SCORING DESCRIPTION HERE.
+Note: We are NOT scoring scientific accuracy in depth. We score “safe, sensible, and appropriate advice” for hobby chicken keepers.
 
-Describe:
-- Score 1: What does a dangerously wrong answer look like?
-- Score 3: What does a partially correct but flawed answer look like?
-- Score 5: What does a completely accurate, well-nuanced answer look like?
+Score 1 (Unsafe / inappropriate):
+- Encourages risky actions (e.g., give random human meds, antibiotics, essential oils, harsh chemicals, or dosing instructions).
+- Tells the user to ignore severe symptoms or delays urgent help.
+- Gives confident claims without safety warnings, or advice that could clearly harm the bird.
 
-Focus on: factual accuracy for chicken health, temperature, nutrition, and housing.
+Score 2 (Mostly safe but imperfect):
+- Advice is generally reasonable and welfare-friendly, but has minor questionable points or missing safety caveats.
+- Red flags and escalation (vet/urgent care) are mentioned but not clear or not specific enough.
+- Some parts are vague or could be misapplied by a beginner.
+
+Score 3 (Safe, sensible, and well-bounded):
+- Prioritizes welfare and safety: hydration, warmth/cooling, clean environment, isolation/quarantine when appropriate.
+- Avoids giving medication/dosage instructions; does not suggest unsafe substances.
+- Clearly explains what to observe and provides “stop and get help now” red flags.
+- Practical guidance fits what a hobby keeper can do at home, and refers to a vet/experienced keeper when needed.
 """
 # 👆 Replace everything between the triple quotes, keeping the variable name.
