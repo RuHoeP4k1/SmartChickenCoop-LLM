@@ -262,7 +262,7 @@ def insert_event(
                 severity,
                 user_query,
                 llm_response,
-                json.dumps(sensor_snapshot) if sensor_snapshot else None,
+                json.dumps(sensor_snapshot, default=str) if sensor_snapshot else None,
                 sensor_context_filtered,
             ),
         )

@@ -50,6 +50,12 @@ async def lifespan(app: FastAPI):
     """Load knowledge base, build retrievers, start scheduler on startup."""
     logger.info("Starting ChickenCare AI...")
 
+    # Ensure DB tables exist (safe to run every startup — uses IF NOT EXISTS)
+    try:
+        setup_database()
+    except Exception as e:
+        logger.warning(f"DB setup failed (is PostgreSQL running?): {e}")
+
     # Build RAG pipeline once
     if os.path.exists(KNOWLEDGE_BASE_PATH):
         docs = load_documents(KNOWLEDGE_BASE_PATH)

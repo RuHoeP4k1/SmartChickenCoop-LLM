@@ -138,19 +138,16 @@ def get_sensor_context(sensor_data: Dict) -> str:
     temp_status = sensor_data.get("temperature_status", "normal")
     if temp_status != "normal":
         temp_c = sensor_data.get("temperature_c")
-        # Less scary wording
-        status_text = "High" if temp_status == "critical" else "Elevated"
         alerts.append(
-            f"🌡️ Temperature: {temp_c:.2f}°C ({status_text})"
+            f"🌡️ Temperature: {temp_c:.2f}°C ({temp_status.capitalize()})"
         )
-    
+
     # Humidity (sensor team labels this)
     humidity_status = sensor_data.get("humidity_status", "normal")
     if humidity_status != "normal":
         humidity_pct = sensor_data.get("humidity_pct")
-        status_text = "High" if humidity_status == "critical" else "Elevated"
         alerts.append(
-            f"💧 Humidity: {humidity_pct:.2f}% ({status_text})"
+            f"💧 Humidity: {humidity_pct:.2f}% ({humidity_status.capitalize()})"
         )
     
     # Heat stress (composite indicator from sensor team)
