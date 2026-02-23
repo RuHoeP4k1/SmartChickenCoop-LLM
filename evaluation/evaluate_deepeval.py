@@ -52,7 +52,7 @@ sys.path.insert(0, _ROOT)
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
-from langchain_ollama import ChatOllama
+from langchain_anthropic import ChatAnthropic
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics import GEval
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
@@ -68,7 +68,7 @@ from eval_config import ACTIONABILITY_CRITERIA, CORRECTNESS_CRITERIA
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-JUDGE_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
+JUDGE_MODEL = os.getenv("CLAUDE_JUDGE_MODEL", "claude-haiku-4-5-20251001")
 KB_PATH = os.path.join(_ROOT, "test_docs")
 CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
 RESULTS_DIR = os.path.join(_HERE, "results")
@@ -76,12 +76,13 @@ RESULTS_FILE = os.path.join(RESULTS_DIR, "deepeval_results.json")
 
 
 # ---------------------------------------------------------------------------
-# Local Ollama judge — overrides DeepEval's default OpenAI judge
+# Claude Haiku judge — overrides DeepEval's default OpenAI judge
+# Requires ANTHROPIC_API_KEY in .env
 # ---------------------------------------------------------------------------
-class OllamaJudge(DeepEvalBaseLLM):
+class ClaudeJudge(DeepEvalBaseLLM):
     def __init__(self, model_name: str = JUDGE_MODEL):
         self.model_name = model_name
-        self.model = ChatOllama(model=model_name, temperature=0)
+        self.model = ChatAnthropic(model=model_name, temperature=0)
 
     def load_model(self):
         return self.model
@@ -93,7 +94,7 @@ class OllamaJudge(DeepEvalBaseLLM):
         return self.generate(prompt)
 
     def get_model_name(self) -> str:
-        return f"Ollama/{self.model_name}"
+        return f"Claude/{self.model_name}"
 
 
 def _check_fill_in():
@@ -118,8 +119,8 @@ def main():
     # -------------------------------------------------------------------------
     # Judge setup — local Ollama, NOT OpenAI
     # -------------------------------------------------------------------------
-    print(f"Setting up local judge: {JUDGE_MODEL}")
-    judge = OllamaJudge(model_name=JUDGE_MODEL)
+    print(f"Judge: {JUDGE_MODEL}")
+    judge = ClaudeJudge(model_name=JUDGE_MODEL)
 
     # G-Eval metrics (criteria come from eval_config.py)
     actionability_metric = GEval(
@@ -157,7 +158,8 @@ def main():
         # RAG answer
         t0 = time.time()
         rag_result = answer_query(
-            question, vectordb, bm25, use_sensors=False, use_hybrid=True
+            question, vectordb, bm25, use_sensors=False, use_hybrid=True,
+            enable_query_rewrite=False,
         )
         rag_time = time.time() - t0
 

@@ -223,11 +223,16 @@ CREATE TABLE IF NOT EXISTS event_log (
     user_query TEXT,
     llm_response TEXT,
     sensor_snapshot JSONB,
-    sensor_context_filtered TEXT
+    sensor_context_filtered TEXT,
+    sources JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_timestamp ON event_log(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_event_type ON event_log(event_type);
+"""
+
+MIGRATE_EVENT_LOG_SQL = """
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS sources JSONB;
 """
 
 
@@ -238,6 +243,7 @@ def insert_event(
     llm_response: str = None,
     sensor_snapshot: dict = None,
     sensor_context_filtered: str = None,
+    sources: list = None,
 ) -> int:
     """
     Log an event to the event_log table.
@@ -255,8 +261,8 @@ def insert_event(
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO event_log
-               (event_type, severity, user_query, llm_response, sensor_snapshot, sensor_context_filtered)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+               (event_type, severity, user_query, llm_response, sensor_snapshot, sensor_context_filtered, sources)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 event_type,
                 severity,
@@ -264,6 +270,7 @@ def insert_event(
                 llm_response,
                 json.dumps(sensor_snapshot, default=str) if sensor_snapshot else None,
                 sensor_context_filtered,
+                json.dumps(list(dict.fromkeys(sources))) if sources else None,
             ),
         )
         event_id = cursor.fetchone()[0]
@@ -339,6 +346,7 @@ def setup_database():
         cursor = conn.cursor()
         cursor.execute(CREATE_TABLE_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)
+        cursor.execute(MIGRATE_EVENT_LOG_SQL)
         conn.commit()
         cursor.close()
         print("Database tables created successfully (sensor_readings + event_log)")

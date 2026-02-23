@@ -108,12 +108,16 @@ export default function ChatPanel() {
     const query = input.trim()
     if (!query || loading) return
 
+    // Build history from current messages before appending the new user turn.
+    // Skip index 0 (static welcome message), send only role + content.
+    const history = messages.slice(1).map(m => ({ role: m.role, content: m.content }))
+
     setInput('')
     setMessages(prev => [...prev, { role: 'user', content: query }])
     setLoading(true)
 
     try {
-      const result = await askQuestion(query)
+      const result = await askQuestion(query, history)
       setMessages(prev => [
         ...prev,
         {

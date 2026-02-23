@@ -14,7 +14,8 @@ const CARD_BORDER = { critical: 'border-red-300', warning: 'border-amber-300', i
 function EventCard({ event }) {
   const [expanded, setExpanded] = useState(false)
   const meta = TYPE_META[event.event_type] || TYPE_META.llm_response
-  const hasBody = event.user_query || event.llm_response || event.sensor_context_filtered
+  const sources = event.sources ? (Array.isArray(event.sources) ? event.sources : JSON.parse(event.sources)) : []
+  const hasBody = event.user_query || event.llm_response || event.sensor_context_filtered || sources.length > 0
 
   return (
     <div className={`rounded-2xl border bg-white overflow-hidden ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
@@ -72,6 +73,18 @@ function EventCard({ event }) {
             <div>
               <p className="text-xs text-stone-400 uppercase tracking-wider font-medium mb-1">AI Response</p>
               <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap">{event.llm_response}</p>
+            </div>
+          )}
+          {sources.length > 0 && (
+            <div>
+              <p className="text-xs text-stone-400 uppercase tracking-wider font-medium mb-1">Sources</p>
+              <ul className="space-y-0.5">
+                {sources.map((src, i) => (
+                  <li key={i} className="text-xs text-stone-500 font-mono bg-stone-50 border border-stone-200 rounded px-2 py-0.5 inline-block mr-1">
+                    {src}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

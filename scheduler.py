@@ -101,6 +101,7 @@ def check_sensors():
                 bm25_retriever=_bm25_retriever,
                 use_sensors=True,
                 use_hybrid=True,
+                enable_query_rewrite=False,  # scheduler queries are already well-formed
             )
 
             insert_event(

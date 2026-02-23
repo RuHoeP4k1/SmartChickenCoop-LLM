@@ -13,7 +13,9 @@ from typing import List, Dict, Tuple
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_community.document_loaders import TextLoader, PyPDFLoader
+import pymupdf4llm
+from langchain_core.documents import Document
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_chroma import Chroma
@@ -49,8 +51,8 @@ def get_llm(model: str = None):
     if _llm is None or _llm.model != model:
         _llm = OllamaLLM(
             model=model,
-            temperature=0.7,
-            num_predict=400
+            temperature=0.3,   # lowered from 0.7 — factual advice needs consistency
+            num_predict=600
         )
     return _llm
 
@@ -84,12 +86,13 @@ def load_documents(folder_path: str) -> List:
     
     # Load PDF files
     for file_path in Path(folder_path).glob("*.pdf"):
-        loader = PyPDFLoader(str(file_path))
-        docs = loader.load()
-        for doc in docs:
-            doc.metadata["source"] = file_path.name
-        documents.extend(docs)
-        print(f"  ✓ Loaded {file_path.name}")
+        md_text = pymupdf4llm.to_markdown(str(file_path))
+        doc = Document(
+            page_content=md_text,
+            metadata={"source": file_path.name}
+        )
+        documents.append(doc)
+        print(f"  ✓ Loaded {file_path.name} (as Markdown)")
     
     print(f"Total documents loaded: {len(documents)}")
     return documents
@@ -120,7 +123,7 @@ def clean_text(text: str) -> str:
     return text
 
 
-def split_documents(documents: List, chunk_size: int = 600, chunk_overlap: int = 100) -> List:
+def split_documents(documents: List, chunk_size: int = 800, chunk_overlap: int = 120) -> List:
     """
     Split documents into smaller chunks for embedding.
     
@@ -271,7 +274,7 @@ def semantic_search(vectordb: Chroma, query: str, k: int = 3) -> List:
 # KEYWORD RETRIEVAL (BM25)
 # =============================================================================
 
-def build_bm25_retriever(chunks: List, k: int = 3) -> BM25Retriever:
+def build_bm25_retriever(chunks: List, k: int = 5) -> BM25Retriever:
     """
     Build BM25 keyword-based retriever.
     
@@ -335,21 +338,34 @@ def hybrid_search(
 # LLM RESPONSE GENERATION
 # =============================================================================
 
-def format_context(documents: List) -> str:
+def format_context(documents: List, max_chars: int = 3000) -> str:
     """
-    Format retrieved documents into context string for LLM.
+    Format retrieved documents into a context string for the LLM.
+    Stops adding chunks once max_chars is reached to protect token budget.
+    At ~4 chars per token, 3000 chars ≈ 750 tokens — safe for Gemma 3n.
 
     Args:
         documents: List of retrieved documents
+        max_chars:  Hard ceiling on total context length in characters
 
     Returns:
-        Formatted context string
+        Formatted context string, capped at max_chars
     """
     context_parts = []
+    total_chars = 0
+
     for i, doc in enumerate(documents, 1):
         source = doc.metadata.get('source', 'Unknown')
         content = doc.page_content
-        context_parts.append(f"[Source {i}: {source}]\n{content}\n")
+        entry = f"[Source {i}: {source}]\n{content}\n"
+
+        if total_chars + len(entry) > max_chars:
+            print(f"  ⚠ Token budget reached — skipping chunk {i} onwards")
+            break
+
+        context_parts.append(entry)
+        total_chars += len(entry)
+
     return "\n".join(context_parts)
 
 
@@ -372,6 +388,92 @@ def generate_response(prompt: str, model: str = None) -> str:
 
 
 # =============================================================================
+# AGENTIC HELPERS — query rewriting + conversation history formatting
+# =============================================================================
+
+def rewrite_query(query: str) -> str:
+    """
+    Rewrite the user's query into a retrieval-optimised sentence for better search results.
+
+    Converts conversational language ("my chicken looks off") into a clear, informative
+    sentence ("chickens showing lethargy and abnormal behaviour signs") that maps well
+    to the semantic embedding space of the knowledge base.
+
+    Pure keyword dumping ("lethargy chickens") is avoided because embedding models
+    understand sentence context — a proper sentence produces better vector similarity
+    than a keyword list.
+
+    Args:
+        query: Original user question (NOT the composite prompt with sensor data —
+               only the raw user question is rewritten)
+
+    Returns:
+        Rewritten sentence optimised for retrieval.
+        Falls back to original query if rewriting fails or output looks wrong.
+    """
+    rewrite_prompt = (
+        f"Rephrase as a search query to find relevant documents. Do not answer it.\n"
+        f"Output ONLY the rephrased query.\nQuestion: {query}\nSearch query:"
+    )
+
+    try:
+        llm = get_llm()
+        rewritten = llm.invoke(rewrite_prompt).strip()
+
+        # Safety: if the LLM returns something empty or suspiciously long, fall back.
+        # 300 chars is generous for a single sentence — anything longer is likely hallucination.
+        if not rewritten or len(rewritten) > 300:
+            return query
+
+        print(f"  ✎ Query rewritten: '{query}' → '{rewritten}'")
+        return rewritten
+
+    except Exception as e:
+        # Never let rewriting break the pipeline — original query is always fine
+        print(f"  ⚠ Query rewrite failed, using original: {e}")
+        return query
+
+
+def format_conversation_history(history: list, max_exchanges: int = 2) -> str:
+    """
+    Format the last N conversation exchanges into a short context prefix.
+
+    Keeps only the most recent exchanges to stay within the small model's
+    token budget (~200 tokens max for 2 exchanges).
+
+    Args:
+        history: List of {"role": "user"|"assistant", "content": "..."} dicts
+        max_exchanges: Maximum number of user+assistant pairs to include
+
+    Returns:
+        Formatted string like:
+        "Previous conversation:
+        User: ...
+        Assistant: ...
+        ---"
+        Or empty string if no history.
+    """
+    if not history:
+        return ""
+
+    # Each "exchange" is one user turn + one assistant turn = 2 items
+    # Take only the last max_exchanges*2 messages
+    recent = history[-(max_exchanges * 2):]
+
+    lines = ["Previous conversation:"]
+    for msg in recent:
+        role = "User" if msg.get("role") == "user" else "Assistant"
+        content = msg.get("content", "").strip()
+        # Truncate very long messages to protect token budget
+        if len(content) > 200:
+            content = content[:200] + "..."
+        lines.append(f"{role}: {content}")
+    lines.append("---")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # COMPLETE RAG PIPELINE
 # =============================================================================
 
@@ -381,7 +483,9 @@ def answer_query(
     bm25_retriever: BM25Retriever,
     use_sensors: bool = True,
     use_hybrid: bool = True,
-    k: int = 5
+    k: int = 5,
+    history: list = None,
+    enable_query_rewrite: bool = True,  # set False for scheduler — query already well-formed
 ) -> Dict:
     """
     Complete RAG pipeline to answer a query.
@@ -413,24 +517,51 @@ def answer_query(
             # should NOT trigger emergency mode even with critical sensors.
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
     
-    # Step 2: Retrieve relevant documents
+    # Step 2: Optionally rewrite query for better retrieval.
+    # Skipped for scheduler-generated queries (enable_query_rewrite=False)
+    # — those are already structured and don't need rewriting.
+    if enable_query_rewrite:
+        search_query = rewrite_query(query)
+    else:
+        search_query = query
+
+    # Step 2b: Retrieve relevant documents using the (possibly rewritten) query
     if use_hybrid:
-        documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
+        documents = hybrid_search(vectordb, bm25_retriever, search_query, k=k)
         retrieval_method = "hybrid"
     else:
-        documents = semantic_search(vectordb, query, k=k)
+        documents = semantic_search(vectordb, search_query, k=k)
         retrieval_method = "semantic"
+
+    # Step 2c: Self-correction — if retrieval looks poor, retry with original query.
+    # "Poor" = no documents returned OR average chunk very short (< 100 chars).
+    # This catches cases where the rewritten query drifted away from the knowledge base.
+    avg_chunk_length = sum(len(d.page_content) for d in documents) / max(len(documents), 1)
+    if not documents or avg_chunk_length < 100:
+        print(f"  ⚠ Retrieval quality low (avg chunk: {avg_chunk_length:.0f} chars) — retrying with original query")
+        if use_hybrid:
+            documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
+        else:
+            documents = semantic_search(vectordb, query, k=k)
+        retrieval_method = retrieval_method + "+corrected"
     
     # Step 3: Format context
     context = format_context(documents)
     
-    # Step 4: Build prompt
+    # Step 4: Build prompt (with optional conversation history prefix)
+    history_prefix = format_conversation_history(history or [])
+
     prompt = get_prompt(
         query=query,
         context=context,
         sensor_context=sensor_context,
-        has_critical=has_critical
+        has_critical=has_critical,
     )
+
+    # Prepend conversation history if available.
+    # History goes BEFORE the main prompt so the LLM sees it as background context.
+    if history_prefix:
+        prompt = history_prefix + "\n\n" + prompt
     
     # Step 5: Generate response
     response = generate_response(prompt)
@@ -440,10 +571,12 @@ def answer_query(
         "query": query,
         "answer": response,
         "sources": [doc.metadata.get('source', 'Unknown') for doc in documents],
+        "documents": documents,
         "sensor_included": sensor_context is not None,
         "sensor_context": sensor_context,
         "has_critical": has_critical,
-        "retrieval_method": retrieval_method
+        "retrieval_method": retrieval_method,
+        "query_rewritten": search_query != query,
     }
     
     return result
@@ -461,7 +594,7 @@ if __name__ == "__main__":
     
     # Load and prepare knowledge base
     docs = load_documents("test_docs")
-    chunks = split_documents(docs, chunk_size=600)
+    chunks = split_documents(docs, chunk_size=800)
     
     # Build retrievers
     vectordb = build_vector_store(chunks)

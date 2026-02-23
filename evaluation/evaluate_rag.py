@@ -156,7 +156,8 @@ def run_evaluation():
             vectordb=vectordb,
             bm25_retriever=bm25,
             use_sensors=False,
-            use_hybrid=True
+            use_hybrid=True,
+            enable_query_rewrite=False,
         )
         rag_time = time.time() - start
 

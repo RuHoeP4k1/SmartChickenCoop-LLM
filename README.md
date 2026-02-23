@@ -238,8 +238,8 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-ollama pull qwen2.5:1.5b-instruct
-ollama pull nomic-embed-text
+ollama pull smollm2:1.7b
+ollama pull nomic-embed-text-v2-moe:latest
 ```
 
 ### 2. Setup PostgreSQL
@@ -385,8 +385,8 @@ To switch back to live mode: set `SIMULATION_MODE=false` (or remove it) and rest
 ### LLM Model
 
 ```
-OLLAMA_MODEL=qwen2.5:1.5b-instruct
-OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_MODEL=smollm2:1.7b
+OLLAMA_EMBED_MODEL=nomic-embed-text-v2-moe:latest
 ```
 
 ---
@@ -400,8 +400,8 @@ search. At query time both retrievers run in parallel and their results are merg
 **Reciprocal Rank Fusion (RRF)** through LangChain's `EnsembleRetriever` with weights
 0.6 (semantic) / 0.4 (keyword).
 
-**Embedding model**: `nomic-embed-text` (768-dimensional, via Ollama) — a sentence-level
-embedding model chosen for strong retrieval performance at low resource cost.
+**Embedding model**: `nomic-embed-text-v2-moe:latest` (via Ollama) — a mixture-of-experts
+sentence embedding model chosen for strong retrieval performance at low resource cost.
 
 **Semantic retriever**: Chroma vector store with HNSW index. Uses **Maximum Marginal
 Relevance (MMR)** sampling (`fetch_k = 9`, `k = 3`) to penalise redundant chunks and
@@ -409,11 +409,21 @@ promote diversity in the retrieved context.
 
 **Keyword retriever**: BM25 (Okapi BM25) via LangChain's `BM25Retriever` (`k = 3`).
 Captures exact terminology (e.g. species names, specific symptoms) that dense embeddings
-may underweight.
+may underweight. The BM25 index is built **in-memory from the same chunks as Chroma** at
+startup — it is a completely separate structure and does **not** query the vector store.
+`k = 3` is the number of top chunks returned, not the BM25 k₁ saturation factor; k₁
+defaults to 1.5 inside `rank_bm25.BM25Okapi`, which is within the recommended 1.2–1.5
+range and is left at its default.
 
 ### Document preprocessing
 
 - Source documents: `.txt` and `.pdf` files in the knowledge base folder.
+- **PDF loading**: PDFs are converted to Markdown via `pymupdf4llm` before chunking
+  (replaces `PyPDFLoader`). `PyPDFLoader` strips all document structure — headers,
+  bullet points, and table rows become flat unformatted text, causing chunks to lose the
+  heading that explained their context (e.g. "38 °C is dangerous" losing the "heat stress"
+  heading). Markdown conversion preserves that structure, giving retrieved chunks richer
+  context for the LLM.
 - Splitting: `RecursiveCharacterTextSplitter` with chunk size 600 chars, overlap 100 chars,
   separators `["\n\n", "\n", ". ", " ", ""]` (paragraph → sentence → word boundary order).
 - Post-split filtering: chunks shorter than 50 characters are discarded to remove headers,
@@ -423,11 +433,15 @@ may underweight.
 
 ### Context budget and prompt design
 
-The 1.5B-parameter LLM (`qwen2.5:1.5b-instruct`) has a limited context window, so token
+The LLM (`smollm2:1.7b`) has a limited context window, so token
 budget is managed explicitly:
 - Each retrieved chunk is capped at 600 characters (aligned with chunk size).
-- Truncation falls back to the nearest sentence boundary to avoid mid-sentence cuts.
-- Up to 3 chunks are included (≈1 800 chars of knowledge context).
+- `format_context()` enforces a hard ceiling of **3 000 characters** total context
+  (≈ 750 tokens at ~4 chars/token). Once the ceiling is reached, additional chunks are
+  silently dropped. This guard prevents silent quality degradation if the knowledge base
+  grows or `k` is changed — without it the model's input can overflow the context window
+  and produce truncated or degraded responses with no warning.
+- Up to 5 chunks are retrieved (`k=5`); the budget guard limits how many are actually sent.
 - Sensor context is injected only when relevant (see Smart Sensor Context Filtering above),
   preventing unnecessary token use on general queries.
 
@@ -439,12 +453,12 @@ Three prompt templates are selected at runtime:
 
 ### LLM configuration
 
-| Parameter | Value |
-|-----------|-------|
-| Model | `qwen2.5:1.5b-instruct` (local, via Ollama) |
-| Temperature | 0.7 |
-| Max new tokens | 400 |
-| Embedding model | `nomic-embed-text` |
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Model | `smollm2:1.7b` (local, via Ollama) | Runs fully offline on consumer hardware (~1.1 GB RAM). SmolLM2 is a HuggingFace model reported to outperform same-size Qwen2.5 on instruction-following benchmarks. Selected over `qwen2.5:1.5b-instruct` after the larger `gemma3n:e2b` (5.8 GB) exceeded available memory on the development machine. |
+| Temperature | 0.1 | Low temperature for consistency and factual grounding — a safety-critical advisory system must give the same answer to the same question; high temperature introduces random variation and increases hallucination risk |
+| Max new tokens | 400 | Sufficient for a complete actionable answer without padding |
+| Embedding model | `nomic-embed-text-v2-moe:latest` | Mixture-of-experts sentence embedding model; strong retrieval performance, runs locally via Ollama |
 
 ### Sensor integration
 
