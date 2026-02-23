@@ -49,6 +49,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import ChatOllama
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics import GEval
@@ -65,7 +68,7 @@ from eval_config import ACTIONABILITY_CRITERIA, CORRECTNESS_CRITERIA
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-JUDGE_MODEL = "qwen2.5:1.5b-instruct"  # swap to qwen2.5:7b if scores are unstable
+JUDGE_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
 KB_PATH = os.path.join(_ROOT, "test_docs")
 CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
 RESULTS_DIR = os.path.join(_HERE, "results")

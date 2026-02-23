@@ -10,6 +10,9 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from langchain_community.document_loaders import TextLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
@@ -34,13 +37,15 @@ def get_embedding_model():
     """Get or create the shared embedding model instance."""
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = OllamaEmbeddings(model="nomic-embed-text")
+        _embedding_model = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
     return _embedding_model
 
 
-def get_llm(model: str = "qwen2.5:1.5b-instruct"):
+def get_llm(model: str = None):
     """Get or create the shared LLM instance."""
     global _llm
+    if model is None:
+        model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
     if _llm is None or _llm.model != model:
         _llm = OllamaLLM(
             model=model,
@@ -348,7 +353,7 @@ def format_context(documents: List) -> str:
     return "\n".join(context_parts)
 
 
-def generate_response(prompt: str, model: str = "qwen2.5:1.5b-instruct") -> str:
+def generate_response(prompt: str, model: str = None) -> str:
     """
     Generate response using LLM.
 
@@ -359,6 +364,8 @@ def generate_response(prompt: str, model: str = "qwen2.5:1.5b-instruct") -> str:
     Returns:
         Generated response
     """
+    if model is None:
+        model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
     llm = get_llm(model)
     response = llm.invoke(prompt)
     return response

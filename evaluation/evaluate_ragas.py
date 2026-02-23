@@ -46,6 +46,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
@@ -62,7 +65,7 @@ from evaluation_data import TEST_CASES
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-JUDGE_MODEL = "qwen2.5:1.5b-instruct"  # swap to qwen2.5:7b if scores are NaN
+JUDGE_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
 KB_PATH = os.path.join(_ROOT, "test_docs")
 CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
 RESULTS_DIR = os.path.join(_HERE, "results")
@@ -97,7 +100,7 @@ def main():
         ChatOllama(model=JUDGE_MODEL, temperature=0)
     )
     judge_embeddings = LangchainEmbeddingsWrapper(
-        OllamaEmbeddings(model="nomic-embed-text")
+        OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
     )
 
     # -------------------------------------------------------------------------

@@ -19,6 +19,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import OllamaLLM
 
 from rag_functions import (
@@ -39,7 +42,7 @@ def get_norag_answer(question: str) -> Dict:
         Dictionary with answer and timing
     """
     llm = OllamaLLM(
-        model="qwen2.5:1.5b-instruct",
+        model=os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct"),
         temperature=0.7,
         num_predict=400
     )
