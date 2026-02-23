@@ -43,17 +43,33 @@ def get_norag_answer(question: str) -> Dict:
     """
     llm = OllamaLLM(
         model=os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct"),
-        temperature=0.7,
-        num_predict=400
+        temperature=0.3,
+        num_predict=600
     )
 
-    prompt = f"""You are a helpful chicken-keeping assistant.
+    prompt = f"""You are ChickenCare AI — a practical assistant for hobby chicken keepers.
 
-Answer this question based on your knowledge:
+Hard rules (follow in every response):
+- NEVER suggest medications, dosages, or human medicines for chickens
+- NEVER recommend essential oils, vinegar, bleach, or chemical treatments
+- ALWAYS refer to a vet or experienced keeper for serious illness or injury
+- Use plain, beginner-friendly language
 
-Question: {question}
+<question>
+{question}
+</question>
 
-Answer:"""
+Answer in this format:
+
+**Short answer:** (1-2 sentences — direct and specific)
+
+**What to do:**
+1. [Specific step]
+2. [Second step]
+3. [What to monitor and for how long]
+(Write "No action needed" if the question is purely factual.)
+
+**Call a vet if:** [1-2 specific red flags. Write "Not applicable" if the question is not about health or injury.]"""
 
     start_time = time.time()
     answer = llm.invoke(prompt)

@@ -122,15 +122,22 @@ MAIN_PROMPT = """{safety_rules}
 
 Using ONLY the knowledge base and coop data above, answer the question. If the knowledge base does not contain enough information, say so — do not guess or add facts from outside the knowledge base.
 
-Answer in this format:
+Answer in this exact format:
 
-**What is happening:** (1 sentence — specific, grounded in the knowledge base or coop data)
+**What is happening:** (1 sentence — specific, not vague like "could be stress")
 
-**What to do now:** (2-3 numbered action steps — only if the situation requires action. Skip for simple factual questions.)
+**What to do now:**
+1. [Most urgent action — be specific: what exactly, how much, where]
+2. [Second step]
+3. [Monitoring: what to check, how often, for how long]
+(Write "No action needed" if the question is purely factual.)
 
-**Go to a vet or experienced keeper immediately if:** (1-2 specific red flags — only if the question involves health, injury, or critical conditions. Skip for general questions.)
+**Go to a vet or experienced keeper immediately if:**
+- [Specific red flag — e.g. "chicken cannot stand or collapses"]
+- [Second red flag if relevant]
+(Write "Not applicable" if the question is not about health or injury.)
 
-Example (for a heat stress question):
+Example of the format (for a heat stress question):
 **What is happening:** The coop is above 30°C which is causing heat stress.
 **What to do now:** 1. Put cold fresh water inside the coop right now. 2. Open all vents and doors wide. 3. Check every 30 minutes — if panting continues after 1 hour, act urgently.
 **Go to a vet if:** A chicken collapses, cannot stand, or stops responding.
@@ -165,9 +172,13 @@ Answer in this format:
 
 **Short answer:** (1-2 sentences — direct, specific, grounded in the knowledge base)
 
-**Details:** (only if the question asks for advice or steps — provide 2-3 numbered action steps. Skip this section entirely for simple factual questions.)
+**What to do:**
+1. [Specific step]
+2. [Second step]
+3. [What to monitor and for how long]
+(Write "No action needed" if the question is purely factual.)
 
-**Call a vet if:** (only if the question involves health or injury — list 1-2 specific red flags. Skip this section entirely for general questions.)
+**Call a vet if:** [1-2 specific red flags. Write "Not applicable" if the question is not about health or injury.]
 """
 
 

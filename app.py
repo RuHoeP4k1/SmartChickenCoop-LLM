@@ -182,20 +182,19 @@ def ask_question(request: QueryRequest):
 
     # Log to event_log for later evaluation
     try:
-        sensor_data = get_latest_sensor_reading() if request.use_sensors else None
         insert_event(
             event_type="llm_response",
             severity="critical" if result["has_critical"] else "info",
             user_query=request.query,
             llm_response=result["answer"],
-            sensor_snapshot=sensor_data,
+            sensor_snapshot=result["sensor_data"],
             sensor_context_filtered=result["sensor_context"],
             sources=result["sources"],
         )
     except Exception as e:
         logger.warning(f"Failed to log event: {e}")
 
-    return QueryResponse(**result)
+    return QueryResponse(**{k: v for k, v in result.items() if k not in ("documents", "sensor_data")})
 
 
 @app.post("/setup-db")

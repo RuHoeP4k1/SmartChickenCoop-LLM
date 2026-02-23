@@ -62,7 +62,7 @@ from ragas.run_config import RunConfig
 
 from rag_functions import (
     load_documents, split_documents, build_vector_store,
-    build_bm25_retriever, answer_query, hybrid_search, semantic_search,
+    build_bm25_retriever, answer_query,
 )
 from evaluate_rag import evaluate_answer_quality
 from evaluation_data import TEST_CASES
@@ -154,9 +154,7 @@ def main():
             enable_query_rewrite=False,
         )
         hybrid_time = time.time() - t0
-        # Retrieve again to get chunk texts for RAGAS
-        hybrid_docs = hybrid_search(vectordb, bm25, question, k=3)
-        hybrid_contexts = [doc.page_content for doc in hybrid_docs]
+        hybrid_contexts = [doc.page_content for doc in hybrid_result["documents"]]
 
         # --- Semantic only ---
         t0 = time.time()
@@ -165,8 +163,7 @@ def main():
             enable_query_rewrite=False,
         )
         semantic_time = time.time() - t0
-        semantic_docs = semantic_search(vectordb, question, k=3)
-        semantic_contexts = [doc.page_content for doc in semantic_docs]
+        semantic_contexts = [doc.page_content for doc in semantic_result["documents"]]
 
         # --- Heuristic scores ---
         hybrid_heuristic = evaluate_answer_quality(hybrid_result["answer"], expected_topics)

@@ -274,7 +274,7 @@ def semantic_search(vectordb: Chroma, query: str, k: int = 3) -> List:
 # KEYWORD RETRIEVAL (BM25)
 # =============================================================================
 
-def build_bm25_retriever(chunks: List, k: int = 5) -> BM25Retriever:
+def build_bm25_retriever(chunks: List, k: int = 4) -> BM25Retriever:
     """
     Build BM25 keyword-based retriever.
     
@@ -342,7 +342,7 @@ def format_context(documents: List, max_chars: int = 3000) -> str:
     """
     Format retrieved documents into a context string for the LLM.
     Stops adding chunks once max_chars is reached to protect token budget.
-    At ~4 chars per token, 3000 chars ≈ 750 tokens — safe for Gemma 3n.
+    At ~4 chars per token, 3000 chars ≈ 750 tokens — keeps input short for small LLMs.
 
     Args:
         documents: List of retrieved documents
@@ -483,7 +483,7 @@ def answer_query(
     bm25_retriever: BM25Retriever,
     use_sensors: bool = True,
     use_hybrid: bool = True,
-    k: int = 5,
+    k: int = 4,
     history: list = None,
     enable_query_rewrite: bool = True,  # set False for scheduler — query already well-formed
 ) -> Dict:
@@ -573,6 +573,7 @@ def answer_query(
         "sources": [doc.metadata.get('source', 'Unknown') for doc in documents],
         "documents": documents,
         "sensor_included": sensor_context is not None,
+        "sensor_data": sensor_data,
         "sensor_context": sensor_context,
         "has_critical": has_critical,
         "retrieval_method": retrieval_method,
