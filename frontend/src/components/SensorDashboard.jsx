@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { getSensors } from '../api'
-import SensorChart from './SensorChart'
 
 // Color tokens for normal / warning / critical status
 const STATUS = {
@@ -31,10 +30,26 @@ const RESOURCE = {
   empty: STATUS.critical,
 }
 
+// For boolean fields (door_open, ventilation_on)
+const BINARY = {
+  true: {
+    card:  'border-sky-300 bg-sky-50',
+    badge: 'bg-sky-100 text-sky-700 border-sky-300',
+    value: 'text-sky-700',
+    dot:   'bg-sky-500',
+  },
+  false: {
+    card:  'border-stone-200 bg-stone-50',
+    badge: 'bg-stone-100 text-stone-500 border-stone-200',
+    value: 'text-stone-500',
+    dot:   'bg-stone-400',
+  },
+}
+
 function MetricCard({ label, value, unit, status, colorMap = STATUS }) {
   const c = colorMap[status] || STATUS.normal
   return (
-    <div className={`rounded-2xl border p-5 transition-colors ${c.card}`}>
+    <div className={`rounded-2xl border p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${c.card}`}>
       <div className="flex items-center justify-between mb-4">
         <span className="text-xs font-medium text-stone-500 uppercase tracking-wider">{label}</span>
         <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${c.badge}`}>
@@ -51,17 +66,22 @@ function MetricCard({ label, value, unit, status, colorMap = STATUS }) {
   )
 }
 
-function StatusCard({ label, status, colorMap = STATUS }) {
-  const c = colorMap[status] || STATUS.normal
+function StatusCard({ label, status, colorMap = STATUS, labelMap = null }) {
+  // Support boolean values as keys by converting to string
+  const key = status != null ? status.toString() : null
+  const c = (key != null ? colorMap[key] : null) || STATUS.normal
+  const displayValue = labelMap && key != null && labelMap[key] != null
+    ? labelMap[key]
+    : (status ?? '—')
   return (
-    <div className={`rounded-2xl border p-5 transition-colors ${c.card}`}>
+    <div className={`rounded-2xl border p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${c.card}`}>
       <div className="mb-4">
         <span className="text-xs font-medium text-stone-500 uppercase tracking-wider">{label}</span>
       </div>
       <div className="flex items-center gap-2">
         <span className={`w-3 h-3 rounded-full shrink-0 ${c.dot}`} />
         <span className={`text-xl font-semibold capitalize ${c.value}`}>
-          {status ?? '—'}
+          {displayValue}
         </span>
       </div>
     </div>
@@ -130,7 +150,16 @@ export default function SensorDashboard() {
 
         {/* Loading */}
         {data === undefined && !error && (
-          <div className="text-center text-stone-400 py-24 text-sm">Loading sensor data…</div>
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[1,2,3,4,5,6].map(i => (
+                <div key={i} className="rounded-2xl border border-stone-200 bg-white p-5">
+                  <div className="skeleton h-3 w-20 mb-4" />
+                  <div className="skeleton h-8 w-16" />
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* No data */}
@@ -142,30 +171,108 @@ export default function SensorDashboard() {
 
         {/* Sensor cards */}
         {r && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              <MetricCard
-                label="Temperature"
-                value={r.temperature_c != null ? r.temperature_c.toFixed(2) : null}
-                unit="°C"
-                status={r.temperature_status}
-              />
-              <MetricCard
-                label="Humidity"
-                value={r.humidity_pct != null ? r.humidity_pct.toFixed(2) : null}
-                unit="%"
-                status={r.humidity_status}
-              />
-              <StatusCard
-                label="Heat Stress Index"
-                status={r.heat_stress_index}
-              />
-            </div>
+          <div className="space-y-6 animate-fade-in">
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <StatusCard label="Feeder"  status={r.feeder_status}  colorMap={RESOURCE} />
-              <StatusCard label="Waterer" status={r.waterer_status} colorMap={RESOURCE} />
-            </div>
+            {/* ── Climate ── */}
+            <section>
+              <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Climate</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <MetricCard
+                  label="Temperature"
+                  value={r.temperature_c != null ? r.temperature_c.toFixed(2) : null}
+                  unit="°C"
+                  status={r.temperature_status}
+                />
+                <MetricCard
+                  label="Humidity"
+                  value={r.humidity_pct != null ? r.humidity_pct.toFixed(2) : null}
+                  unit="%"
+                  status={r.humidity_status}
+                />
+                <StatusCard
+                  label="Heat Stress Index"
+                  status={r.heat_stress_index}
+                />
+              </div>
+            </section>
+
+            {/* ── Resource Levels ── */}
+            <section>
+              <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Resource Levels</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <MetricCard
+                  label="Feeder"
+                  value={r.feeder_pct != null ? r.feeder_pct.toFixed(0) : null}
+                  unit="%"
+                  status={r.feeder_status}
+                  colorMap={RESOURCE}
+                />
+                <MetricCard
+                  label="Waterer"
+                  value={r.waterer_pct != null ? r.waterer_pct.toFixed(0) : null}
+                  unit="%"
+                  status={r.waterer_status}
+                  colorMap={RESOURCE}
+                />
+              </div>
+            </section>
+
+            {/* ── Flock ── */}
+            <section>
+              <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Flock</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <MetricCard
+                  label="Chickens Inside"
+                  value={r.chickens_inside != null ? r.chickens_inside : null}
+                  unit=""
+                  status="normal"
+                />
+                <MetricCard
+                  label="Egg Count"
+                  value={r.egg_count != null ? r.egg_count : null}
+                  unit=""
+                  status="normal"
+                />
+              </div>
+            </section>
+
+            {/* ── Air Quality & Risk ── */}
+            <section>
+              <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Air Quality & Risk</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <MetricCard
+                  label="H₂S"
+                  value={r.h2s_ppm != null ? r.h2s_ppm.toFixed(2) : null}
+                  unit="ppm"
+                  status={r.h2s_level}
+                />
+                <MetricCard
+                  label="Mold Risk Score"
+                  value={r.mold_risk_score != null ? r.mold_risk_score.toFixed(1) : null}
+                  unit="score"
+                  status={r.mold_risk_status}
+                />
+              </div>
+            </section>
+
+            {/* ── Coop Controls ── */}
+            <section>
+              <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Coop Controls</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <StatusCard
+                  label="Door"
+                  status={r.door_open}
+                  colorMap={BINARY}
+                  labelMap={{ true: 'Open', false: 'Closed' }}
+                />
+                <StatusCard
+                  label="Ventilation"
+                  status={r.ventilation_on}
+                  colorMap={BINARY}
+                  labelMap={{ true: 'Running', false: 'Off' }}
+                />
+              </div>
+            </section>
 
             {/* AI summary from /sensors */}
             {data.summary && (
@@ -183,8 +290,6 @@ export default function SensorDashboard() {
           </div>
         )}
 
-        {/* Historical chart — always visible, has its own loading state */}
-        <SensorChart />
       </div>
     </div>
   )

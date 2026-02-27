@@ -85,7 +85,9 @@ def check_sensors():
     # Determine severity
     temp_critical = reading.get("temperature_status") == "critical"
     stress_critical = reading.get("heat_stress_index") == "critical"
-    severity = "critical" if (temp_critical or stress_critical) else "warning"
+    h2s_critical = reading.get("h2s_level") == "critical"
+    mold_critical = reading.get("mold_risk_status") == "critical"
+    severity = "critical" if (temp_critical or stress_critical or h2s_critical or mold_critical) else "warning"
 
     sensor_context = get_sensor_context(reading)
     logger.warning(f"Scheduler alert [{severity}]: {'; '.join(critical_alerts)}")
@@ -101,7 +103,6 @@ def check_sensors():
                 bm25_retriever=_bm25_retriever,
                 use_sensors=True,
                 use_hybrid=True,
-                enable_query_rewrite=False,  # scheduler queries are already well-formed
             )
 
             insert_event(
@@ -139,6 +140,16 @@ _SIM_SCENARIOS = {
         "heat_stress_index": "normal",
         "feeder_status": "full",
         "waterer_status": "full",
+        "feeder_pct": lambda: random.uniform(70, 100),
+        "waterer_pct": lambda: random.uniform(70, 100),
+        "chickens_inside": lambda: random.randint(8, 12),
+        "egg_count": lambda: random.randint(0, 5),
+        "h2s_ppm": lambda: random.uniform(0, 2),
+        "h2s_level": "normal",
+        "mold_risk_score": lambda: random.uniform(0, 20),
+        "mold_risk_status": "normal",
+        "door_open": False,
+        "ventilation_on": False,
     },
     "hot_day": {
         "temperature_c": lambda: random.uniform(28, 32),
@@ -148,6 +159,16 @@ _SIM_SCENARIOS = {
         "heat_stress_index": "warning",
         "feeder_status": lambda: random.choice(["full", "full", "low"]),
         "waterer_status": lambda: random.choice(["full", "low"]),
+        "feeder_pct": lambda: random.uniform(40, 80),
+        "waterer_pct": lambda: random.uniform(30, 70),
+        "chickens_inside": lambda: random.randint(5, 10),
+        "egg_count": lambda: random.randint(0, 3),
+        "h2s_ppm": lambda: random.uniform(1, 5),
+        "h2s_level": "normal",
+        "mold_risk_score": lambda: random.uniform(20, 50),
+        "mold_risk_status": lambda: random.choice(["normal", "warning"]),
+        "door_open": True,
+        "ventilation_on": True,
     },
     "critical": {
         "temperature_c": lambda: random.uniform(35, 38),
@@ -157,6 +178,16 @@ _SIM_SCENARIOS = {
         "heat_stress_index": "critical",
         "feeder_status": lambda: random.choice(["low", "empty"]),
         "waterer_status": lambda: random.choice(["low", "empty"]),
+        "feeder_pct": lambda: random.uniform(5, 25),
+        "waterer_pct": lambda: random.uniform(5, 20),
+        "chickens_inside": lambda: random.randint(2, 8),
+        "egg_count": 0,
+        "h2s_ppm": lambda: random.uniform(10, 25),
+        "h2s_level": lambda: random.choice(["warning", "critical"]),
+        "mold_risk_score": lambda: random.uniform(60, 95),
+        "mold_risk_status": "critical",
+        "door_open": lambda: random.choice([True, False]),
+        "ventilation_on": False,
     },
     "cold_night": {
         "temperature_c": lambda: random.uniform(8, 14),
@@ -166,6 +197,16 @@ _SIM_SCENARIOS = {
         "heat_stress_index": "normal",
         "feeder_status": "full",
         "waterer_status": "full",
+        "feeder_pct": lambda: random.uniform(60, 100),
+        "waterer_pct": lambda: random.uniform(60, 100),
+        "chickens_inside": lambda: random.randint(10, 14),
+        "egg_count": lambda: random.randint(0, 8),
+        "h2s_ppm": lambda: random.uniform(0, 3),
+        "h2s_level": "normal",
+        "mold_risk_score": lambda: random.uniform(30, 60),
+        "mold_risk_status": lambda: random.choice(["normal", "warning"]),
+        "door_open": False,
+        "ventilation_on": lambda: random.choice([True, False]),
     },
     "resource_low": {
         "temperature_c": lambda: random.uniform(20, 24),
@@ -175,6 +216,16 @@ _SIM_SCENARIOS = {
         "heat_stress_index": "normal",
         "feeder_status": "low",
         "waterer_status": "low",
+        "feeder_pct": lambda: random.uniform(5, 20),
+        "waterer_pct": lambda: random.uniform(5, 20),
+        "chickens_inside": lambda: random.randint(8, 12),
+        "egg_count": lambda: random.randint(0, 4),
+        "h2s_ppm": lambda: random.uniform(0, 3),
+        "h2s_level": "normal",
+        "mold_risk_score": lambda: random.uniform(10, 35),
+        "mold_risk_status": "normal",
+        "door_open": False,
+        "ventilation_on": False,
     },
 }
 

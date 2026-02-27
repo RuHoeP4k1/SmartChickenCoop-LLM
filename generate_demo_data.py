@@ -27,9 +27,19 @@ def generate_scenario_data(scenario: str = "normal"):
             "humidity_status": "normal",
             "heat_stress_index": "normal",
             "feeder_status": "full",
-            "waterer_status": "full"
+            "waterer_status": "full",
+            "feeder_pct": random.uniform(70, 100),
+            "waterer_pct": random.uniform(70, 100),
+            "chickens_inside": random.randint(8, 12),
+            "egg_count": random.randint(0, 5),
+            "h2s_ppm": random.uniform(0, 2),
+            "h2s_level": "normal",
+            "mold_risk_score": random.uniform(0, 20),
+            "mold_risk_status": "normal",
+            "door_open": False,
+            "ventilation_on": False,
         },
-        
+
         "hot_day": {
             "temperature_c": random.uniform(28, 32),
             "temperature_status": "warning",
@@ -37,9 +47,19 @@ def generate_scenario_data(scenario: str = "normal"):
             "humidity_status": "warning",
             "heat_stress_index": "warning",
             "feeder_status": random.choice(["full", "full", "low"]),
-            "waterer_status": random.choice(["full", "low"])
+            "waterer_status": random.choice(["full", "low"]),
+            "feeder_pct": random.uniform(40, 80),
+            "waterer_pct": random.uniform(30, 70),
+            "chickens_inside": random.randint(5, 10),
+            "egg_count": random.randint(0, 3),
+            "h2s_ppm": random.uniform(1, 5),
+            "h2s_level": "normal",
+            "mold_risk_score": random.uniform(20, 50),
+            "mold_risk_status": random.choice(["normal", "warning"]),
+            "door_open": True,
+            "ventilation_on": True,
         },
-        
+
         "critical": {
             "temperature_c": random.uniform(35, 38),
             "temperature_status": "critical",
@@ -47,9 +67,19 @@ def generate_scenario_data(scenario: str = "normal"):
             "humidity_status": "critical",
             "heat_stress_index": "critical",
             "feeder_status": random.choice(["low", "empty"]),
-            "waterer_status": random.choice(["low", "empty"])
+            "waterer_status": random.choice(["low", "empty"]),
+            "feeder_pct": random.uniform(5, 25),
+            "waterer_pct": random.uniform(5, 20),
+            "chickens_inside": random.randint(2, 8),
+            "egg_count": 0,
+            "h2s_ppm": random.uniform(10, 25),
+            "h2s_level": random.choice(["warning", "critical"]),
+            "mold_risk_score": random.uniform(60, 95),
+            "mold_risk_status": "critical",
+            "door_open": random.choice([True, False]),
+            "ventilation_on": False,
         },
-        
+
         "cold_night": {
             "temperature_c": random.uniform(8, 14),
             "temperature_status": "warning",
@@ -57,9 +87,19 @@ def generate_scenario_data(scenario: str = "normal"):
             "humidity_status": "normal",
             "heat_stress_index": "normal",
             "feeder_status": "full",
-            "waterer_status": "full"
+            "waterer_status": "full",
+            "feeder_pct": random.uniform(60, 100),
+            "waterer_pct": random.uniform(60, 100),
+            "chickens_inside": random.randint(10, 14),
+            "egg_count": random.randint(0, 8),
+            "h2s_ppm": random.uniform(0, 3),
+            "h2s_level": "normal",
+            "mold_risk_score": random.uniform(30, 60),
+            "mold_risk_status": random.choice(["normal", "warning"]),
+            "door_open": False,
+            "ventilation_on": random.choice([True, False]),
         },
-        
+
         "resource_low": {
             "temperature_c": random.uniform(20, 24),
             "temperature_status": "normal",
@@ -67,7 +107,17 @@ def generate_scenario_data(scenario: str = "normal"):
             "humidity_status": "normal",
             "heat_stress_index": "normal",
             "feeder_status": "low",
-            "waterer_status": "low"
+            "waterer_status": "low",
+            "feeder_pct": random.uniform(5, 20),
+            "waterer_pct": random.uniform(5, 20),
+            "chickens_inside": random.randint(8, 12),
+            "egg_count": random.randint(0, 4),
+            "h2s_ppm": random.uniform(0, 3),
+            "h2s_level": "normal",
+            "mold_risk_score": random.uniform(10, 35),
+            "mold_risk_status": "normal",
+            "door_open": False,
+            "ventilation_on": False,
         }
     }
     
@@ -221,8 +271,14 @@ def show_latest_reading():
     print(f"Temperature: {latest['temperature_c']:.1f}°C [{latest['temperature_status']}]")
     print(f"Humidity: {latest['humidity_pct']:.1f}% [{latest['humidity_status']}]")
     print(f"Heat Stress: {latest['heat_stress_index']}")
-    print(f"Feeder: {latest['feeder_status']}")
-    print(f"Waterer: {latest['waterer_status']}")
+    print(f"Feeder: {latest['feeder_status']} ({latest.get('feeder_pct', 'N/A')}%)")
+    print(f"Waterer: {latest['waterer_status']} ({latest.get('waterer_pct', 'N/A')}%)")
+    print(f"Chickens inside: {latest.get('chickens_inside', 'N/A')}")
+    print(f"Egg count: {latest.get('egg_count', 'N/A')}")
+    print(f"H2S: {latest.get('h2s_ppm', 'N/A')} ppm [{latest.get('h2s_level', 'N/A')}]")
+    print(f"Mold risk: {latest.get('mold_risk_score', 'N/A')} [{latest.get('mold_risk_status', 'N/A')}]")
+    print(f"Door open: {latest.get('door_open', 'N/A')}")
+    print(f"Ventilation on: {latest.get('ventilation_on', 'N/A')}")
 
 
 if __name__ == "__main__":

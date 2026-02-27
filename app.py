@@ -122,7 +122,6 @@ class QueryResponse(BaseModel):
     sensor_context: Optional[str]
     has_critical: bool
     retrieval_method: str
-    query_rewritten: bool
 
 
 

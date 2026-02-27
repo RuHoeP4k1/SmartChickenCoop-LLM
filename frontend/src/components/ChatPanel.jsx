@@ -41,6 +41,7 @@ function AssistantMessage({ msg }) {
               h2:     ({ children }) => <h2 className="text-sm font-bold text-stone-900 mb-1">{children}</h2>,
               h3:     ({ children }) => <h3 className="text-sm font-semibold text-stone-700 mb-1">{children}</h3>,
               code:   ({ children }) => <code className="bg-stone-100 text-amber-700 rounded px-1 text-xs font-mono border border-stone-200">{children}</code>,
+              pre:    ({ children }) => <pre className="bg-stone-100 border border-stone-200 rounded-lg p-3 text-xs font-mono overflow-x-auto my-2">{children}</pre>,
             }}
           >
             {msg.content}
@@ -167,9 +168,9 @@ export default function ChatPanel() {
           <button
             type="submit"
             disabled={loading || !input.trim()}
-            className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-3 rounded-xl text-sm font-medium transition-colors"
+            className="bg-amber-600 hover:bg-amber-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-3 rounded-xl text-sm font-medium transition-all duration-150"
           >
-            Send
+            {loading ? 'Asking…' : 'Send'}
           </button>
         </form>
       </div>

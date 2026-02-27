@@ -115,7 +115,7 @@ def main():
     )
     # Embeddings always come from local Ollama (used by AnswerRelevancy)
     judge_embeddings = LangchainEmbeddingsWrapper(
-        OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
+        OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe"))
     )
 
     # -------------------------------------------------------------------------
@@ -145,7 +145,6 @@ def main():
         t0 = time.time()
         rag_result = answer_query(
             question, vectordb, bm25, use_sensors=False, use_hybrid=True,
-            enable_query_rewrite=False,
         )
         contexts = [doc.page_content for doc in rag_result["documents"]]
         rag_time = time.time() - t0

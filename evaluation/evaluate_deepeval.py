@@ -159,7 +159,6 @@ def main():
         t0 = time.time()
         rag_result = answer_query(
             question, vectordb, bm25, use_sensors=False, use_hybrid=True,
-            enable_query_rewrite=False,
         )
         rag_time = time.time() - t0
 

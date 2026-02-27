@@ -151,7 +151,6 @@ def main():
         t0 = time.time()
         hybrid_result = answer_query(
             question, vectordb, bm25, use_sensors=False, use_hybrid=True,
-            enable_query_rewrite=False,
         )
         hybrid_time = time.time() - t0
         hybrid_contexts = [doc.page_content for doc in hybrid_result["documents"]]
@@ -160,7 +159,6 @@ def main():
         t0 = time.time()
         semantic_result = answer_query(
             question, vectordb, bm25, use_sensors=False, use_hybrid=False,
-            enable_query_rewrite=False,
         )
         semantic_time = time.time() - t0
         semantic_contexts = [doc.page_content for doc in semantic_result["documents"]]

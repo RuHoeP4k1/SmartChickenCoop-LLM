@@ -80,28 +80,30 @@ come from our documents, not from ChatGPT's general knowledge.
 
 ### File 2: `eval_config.py`
 
-This file has two text blocks you need to write. No code, just plain English descriptions.
+**This file is already filled in.** You do not need to edit it unless you think the criteria are wrong or could be improved.
 
-**1. `ACTIONABILITY_CRITERIA`**
+The file contains two scoring criteria used by an AI judge (Claude Haiku) to score our system's answers on a **1–3 scale** — not 1–5.
 
-Our AI is supposed to give chicken keepers clear steps to follow — not just explain things.
-A farmer whose chicken is sick does not need a lecture on chicken biology.
-They need to know: check the foot, isolate the bird, call the vet if X happens.
+**1. `ACTIONABILITY_CRITERIA`** — Does the answer tell the keeper what to do?
 
-Write a description of what each score level looks like:
-- Score 1 (worst): the answer gives no steps at all, just background info
-- Score 3 (okay): the answer gives some advice but it is vague or incomplete
-- Score 5 (best): the answer gives specific numbered steps the keeper can follow right now
+Key principle: the score reflects *usefulness*, not *format*.
+A short direct answer to a simple question scores a 3. A vague answer that leaves the user unsure what to do scores a 1 or 2.
+**Do not penalise a short answer for lacking numbered steps** — format is irrelevant, outcome is what matters.
 
-**2. `CORRECTNESS_CRITERIA`**
+- Score 1 (not actionable): vague generalities, nothing to act on
+- Score 2 (partially actionable): has some useful info but leaves important gaps
+- Score 3 (genuinely helpful): the keeper knows what to do or think next without needing to search elsewhere
 
-Write a description of what factually correct vs wrong looks like for chicken keeping advice:
-- Score 1 (worst): the advice is actually dangerous — wrong temperatures, harmful feeding, etc.
-- Score 3 (okay): mostly right but has some inaccuracies
-- Score 5 (best): completely accurate, with correct numbers and nuance
+**2. `CORRECTNESS_CRITERIA`** — Is the chicken-keeping advice factually accurate and safe?
 
-You know enough about poultry science to write this. Think about what kinds of
-wrong answers could actually harm the chickens.
+Key principle: vet referrals are **only** relevant when the question involves a genuine health or injury concern.
+An answer about egg-laying frequency should **not** be penalised for failing to mention a vet.
+
+- Score 1 (incorrect or harmful): wrong facts, dangerous advice, contradicts poultry welfare practice
+- Score 2 (mostly correct): core is right but has a meaningful inaccuracy or important omission
+- Score 3 (correct and appropriate): accurate, safe, calibrated to the question type
+
+If you think these criteria are wrong or incomplete, leave a comment in the file explaining your reasoning.
 
 ---
 
@@ -122,10 +124,11 @@ For each one:
 
 Replace all `"FILL_IN"` values with your actual content.
 
-**Step 3: Fill in `eval_config.py`**
+**Step 3: Review `eval_config.py`**
 
-Write the two scoring criteria. A paragraph or two each is enough.
-Replace the `FILL_IN` placeholder text inside the triple-quoted strings.
+The two scoring criteria are already written. Read them to understand how the AI judge
+will score answers — this affects how you write your `ground_truth` answers.
+If you think the criteria should be changed, leave a comment in the file.
 
 ---
 
@@ -149,10 +152,9 @@ This kind of input is genuinely useful and might end up improving the evaluation
 
 When you are finished, there should be:
 - Zero `FILL_IN` strings remaining in `evaluation_data.py`
-- Zero `FILL_IN` strings remaining in `eval_config.py`
-- Every `ground_truth` is 2–5 real sentences (not placeholder text)
+- Every `ground_truth` is 2–5 real sentences based on `test_docs/` content
 - Every `expected_topics` has 2–4 actual keywords (reviewed against test_docs/)
-- The two criteria descriptions in `eval_config.py` describe specific score levels
+- `eval_config.py` is either unchanged or has your improvement comments added
 
 ---
 
@@ -182,8 +184,8 @@ When you are finished, there should be:
 
 ## One Last Note on the Comparison Setup
 
-Right now we are comparing our RAG system against our own local Qwen model with no documents.
-That is the core comparison: does RAG help Qwen give better answers?
+Right now we are comparing our RAG system against our own local smollm2 model with no documents.
+That is the core comparison: does RAG help the model give better answers?
 
 There is also a question of whether we should compare against a stronger AI model
 (like GPT-4 or Claude) to show where our system sits relative to frontier models.

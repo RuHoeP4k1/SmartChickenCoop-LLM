@@ -39,7 +39,7 @@ def get_embedding_model():
     """Get or create the shared embedding model instance."""
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
+        _embedding_model = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe"))
     return _embedding_model
 
 
@@ -47,12 +47,15 @@ def get_llm(model: str = None):
     """Get or create the shared LLM instance."""
     global _llm
     if model is None:
-        model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
+        model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
     if _llm is None or _llm.model != model:
         _llm = OllamaLLM(
             model=model,
-            temperature=0.3,   # lowered from 0.7 — factual advice needs consistency
-            num_predict=600
+            temperature=0.2,      # low — factual advice needs consistency
+            num_predict=400,      # tight budget — forces concise answers
+            repeat_penalty=1.1,   # prevents small-model repetition loops
+            top_k=40,
+            top_p=0.9,
         )
     return _llm
 
@@ -355,9 +358,8 @@ def format_context(documents: List, max_chars: int = 3000) -> str:
     total_chars = 0
 
     for i, doc in enumerate(documents, 1):
-        source = doc.metadata.get('source', 'Unknown')
         content = doc.page_content
-        entry = f"[Source {i}: {source}]\n{content}\n"
+        entry = content.strip() + "\n"
 
         if total_chars + len(entry) > max_chars:
             print(f"  ⚠ Token budget reached — skipping chunk {i} onwards")
@@ -366,7 +368,7 @@ def format_context(documents: List, max_chars: int = 3000) -> str:
         context_parts.append(entry)
         total_chars += len(entry)
 
-    return "\n".join(context_parts)
+    return "\n\n".join(context_parts)
 
 
 def generate_response(prompt: str, model: str = None) -> str:
@@ -381,58 +383,15 @@ def generate_response(prompt: str, model: str = None) -> str:
         Generated response
     """
     if model is None:
-        model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
+        model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
     llm = get_llm(model)
     response = llm.invoke(prompt)
     return response
 
 
 # =============================================================================
-# AGENTIC HELPERS — query rewriting + conversation history formatting
+# CONVERSATION HISTORY FORMATTING
 # =============================================================================
-
-def rewrite_query(query: str) -> str:
-    """
-    Rewrite the user's query into a retrieval-optimised sentence for better search results.
-
-    Converts conversational language ("my chicken looks off") into a clear, informative
-    sentence ("chickens showing lethargy and abnormal behaviour signs") that maps well
-    to the semantic embedding space of the knowledge base.
-
-    Pure keyword dumping ("lethargy chickens") is avoided because embedding models
-    understand sentence context — a proper sentence produces better vector similarity
-    than a keyword list.
-
-    Args:
-        query: Original user question (NOT the composite prompt with sensor data —
-               only the raw user question is rewritten)
-
-    Returns:
-        Rewritten sentence optimised for retrieval.
-        Falls back to original query if rewriting fails or output looks wrong.
-    """
-    rewrite_prompt = (
-        f"Rephrase as a search query to find relevant documents. Do not answer it.\n"
-        f"Output ONLY the rephrased query.\nQuestion: {query}\nSearch query:"
-    )
-
-    try:
-        llm = get_llm()
-        rewritten = llm.invoke(rewrite_prompt).strip()
-
-        # Safety: if the LLM returns something empty or suspiciously long, fall back.
-        # 300 chars is generous for a single sentence — anything longer is likely hallucination.
-        if not rewritten or len(rewritten) > 300:
-            return query
-
-        print(f"  ✎ Query rewritten: '{query}' → '{rewritten}'")
-        return rewritten
-
-    except Exception as e:
-        # Never let rewriting break the pipeline — original query is always fine
-        print(f"  ⚠ Query rewrite failed, using original: {e}")
-        return query
-
 
 def format_conversation_history(history: list, max_exchanges: int = 2) -> str:
     """
@@ -485,70 +444,46 @@ def answer_query(
     use_hybrid: bool = True,
     k: int = 4,
     history: list = None,
-    enable_query_rewrite: bool = True,  # set False for scheduler — query already well-formed
 ) -> Dict:
     """
-    Complete RAG pipeline to answer a query.
-    
+    Complete RAG pipeline: retrieve relevant chunks, build prompt, generate answer.
+
     Args:
-        query: User's question
-        vectordb: Chroma vector database
-        bm25_retriever: BM25 retriever
-        use_sensors: Whether to check and include sensor data
-        use_hybrid: Whether to use hybrid retrieval (vs semantic only)
-    
+        query:           User's question
+        vectordb:        Chroma vector database
+        bm25_retriever:  BM25 keyword retriever
+        use_sensors:     Whether to check and include live sensor data
+        use_hybrid:      Whether to use hybrid retrieval (vs semantic only)
+        k:               Number of chunks to retrieve
+        history:         Recent conversation history for context
+
     Returns:
         Dictionary with answer, sources, and metadata
     """
-    
+
     # Step 1: Get sensor data if enabled
     sensor_data = None
     sensor_context = None
     has_critical = False
-    
+
     if use_sensors:
         sensor_data = get_latest_sensor_reading()
-
         if sensor_data and should_include_sensors(query, sensor_data):
             sensor_context = get_sensor_context(sensor_data)
             critical_alerts = get_critical_alerts(sensor_data)
-            # Only activate emergency mode when BOTH critical AND query
-            # is about environment. "How often do chickens lay eggs?"
-            # should NOT trigger emergency mode even with critical sensors.
+            # Emergency mode only when critical AND user is asking about their coop
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
-    
-    # Step 2: Optionally rewrite query for better retrieval.
-    # Skipped for scheduler-generated queries (enable_query_rewrite=False)
-    # — those are already structured and don't need rewriting.
-    if enable_query_rewrite:
-        search_query = rewrite_query(query)
-    else:
-        search_query = query
 
-    # Step 2b: Retrieve relevant documents using the (possibly rewritten) query
+    # Step 2: Retrieve relevant documents
     if use_hybrid:
-        documents = hybrid_search(vectordb, bm25_retriever, search_query, k=k)
+        documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
         retrieval_method = "hybrid"
     else:
-        documents = semantic_search(vectordb, search_query, k=k)
+        documents = semantic_search(vectordb, query, k=k)
         retrieval_method = "semantic"
 
-    # Step 2c: Self-correction — if retrieval looks poor, retry with original query.
-    # "Poor" = no documents returned OR average chunk very short (< 100 chars).
-    # This catches cases where the rewritten query drifted away from the knowledge base.
-    avg_chunk_length = sum(len(d.page_content) for d in documents) / max(len(documents), 1)
-    if not documents or avg_chunk_length < 100:
-        print(f"  ⚠ Retrieval quality low (avg chunk: {avg_chunk_length:.0f} chars) — retrying with original query")
-        if use_hybrid:
-            documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
-        else:
-            documents = semantic_search(vectordb, query, k=k)
-        retrieval_method = retrieval_method + "+corrected"
-    
-    # Step 3: Format context
+    # Step 3: Build prompt
     context = format_context(documents)
-    
-    # Step 4: Build prompt (with optional conversation history prefix)
     history_prefix = format_conversation_history(history or [])
 
     prompt = get_prompt(
@@ -558,29 +493,23 @@ def answer_query(
         has_critical=has_critical,
     )
 
-    # Prepend conversation history if available.
-    # History goes BEFORE the main prompt so the LLM sees it as background context.
     if history_prefix:
         prompt = history_prefix + "\n\n" + prompt
-    
-    # Step 5: Generate response
+
+    # Step 4: Generate response
     response = generate_response(prompt)
-    
-    # Step 6: Package results
-    result = {
+
+    return {
         "query": query,
         "answer": response,
-        "sources": [doc.metadata.get('source', 'Unknown') for doc in documents],
+        "sources": [doc.metadata.get("source", "Unknown") for doc in documents],
         "documents": documents,
         "sensor_included": sensor_context is not None,
         "sensor_data": sensor_data,
         "sensor_context": sensor_context,
         "has_critical": has_critical,
         "retrieval_method": retrieval_method,
-        "query_rewritten": search_query != query,
     }
-    
-    return result
 
 
 # =============================================================================

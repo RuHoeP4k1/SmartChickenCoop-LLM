@@ -42,7 +42,7 @@ def get_norag_answer(question: str) -> Dict:
         Dictionary with answer and timing
     """
     llm = OllamaLLM(
-        model=os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct"),
+        model=os.getenv("OLLAMA_MODEL", "smollm2:1.7b"),
         temperature=0.3,
         num_predict=600
     )
@@ -101,22 +101,25 @@ def evaluate_answer_quality(answer: str, expected_topics: List[str]) -> Dict:
     )
     topic_score = (topics_covered / len(expected_topics)) * 100 if expected_topics else 0
 
-    # 2. Length (ideal 100-300 words)
+    # 2. Length (ideal 30-150 words — matches "keep it short, a few sentences" prompts)
     word_count = len(answer.split())
-    if 100 <= word_count <= 300:
+    if 30 <= word_count <= 150:
         length_score = 100
-    elif word_count < 100:
-        length_score = max(0, word_count)  # Penalize too short
+    elif word_count < 30:
+        length_score = max(0, (word_count / 30) * 100)  # Penalize probably-incomplete
     else:
-        length_score = max(0, 100 - (word_count - 300) / 10)  # Penalize too long
+        length_score = max(0, 100 - (word_count - 150) / 0.5)  # Penalize rambling; hits 0 at 200
 
-    # 3. Actionability (has steps or clear actions)
-    has_numbers = any(str(i) in answer for i in range(1, 6))
-    has_action_words = any(
-        word in answer_lower
-        for word in ["should", "must", "need to", "make sure", "check", "ensure"]
-    )
-    actionable_score = 100 if (has_numbers or has_action_words) else 50
+    # 3. Actionability (natural-language advice signals — gradient, not binary)
+    action_signals = [
+        "should", "must", "need to", "make sure", "check", "ensure",
+        "try", "consider", "keep", "avoid", "provide", "watch for",
+        "look for", "add", "remove", "adjust", "monitor", "clean",
+        "replace", "increase", "decrease", "contact a vet", "call a vet",
+    ]
+    hits = sum(1 for phrase in action_signals if phrase in answer_lower)
+    # 0 hits = 30 (answer exists but gives no advice), caps at 100 with 4+ hits
+    actionable_score = min(100, 30 + hits * 17.5)
 
     # Overall score (weighted average)
     overall_score = (topic_score * 0.5 + length_score * 0.3 + actionable_score * 0.2)
@@ -173,7 +176,6 @@ def run_evaluation():
             bm25_retriever=bm25,
             use_sensors=False,
             use_hybrid=True,
-            enable_query_rewrite=False,
         )
         rag_time = time.time() - start
 

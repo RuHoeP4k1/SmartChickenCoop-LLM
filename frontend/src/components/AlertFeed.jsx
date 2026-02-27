@@ -18,7 +18,7 @@ function EventCard({ event }) {
   const hasBody = event.user_query || event.llm_response || event.sensor_context_filtered || sources.length > 0
 
   return (
-    <div className={`rounded-2xl border bg-white overflow-hidden ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
+    <div className={`rounded-2xl border bg-white overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
       {/* Card header — always visible */}
       <div
         className={`px-4 py-3 flex items-start justify-between gap-3 ${hasBody ? 'cursor-pointer hover:bg-stone-50 transition-colors' : ''}`}
@@ -169,14 +169,26 @@ export default function AlertFeed() {
         )}
 
         {loading && (
-          <div className="text-center text-stone-400 py-24 text-sm">Loading events…</div>
+          <div className="space-y-3">
+            {[1,2,3].map(i => (
+              <div key={i} className="rounded-2xl border border-stone-200 bg-white p-4">
+                <div className="flex items-center gap-3">
+                  <div className="skeleton w-6 h-6 rounded-full shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="skeleton h-3 w-24" />
+                    <div className="skeleton h-3 w-48" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {!loading && events.length === 0 && (
           <div className="text-center text-stone-400 py-24 text-sm">No events yet.</div>
         )}
 
-        <div className="space-y-3">
+        <div className="space-y-3 animate-fade-in">
           {events.map(event => <EventCard key={event.id} event={event} />)}
         </div>
       </div>

@@ -13,12 +13,12 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
       </header>
 
       {/* Tabs */}
-      <nav className="shrink-0 bg-stone-800 border-b border-stone-700 px-6 flex">
+      <nav className="shrink-0 bg-stone-800 border-b border-stone-700 px-6 flex overflow-x-auto scrollbar-hide">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => onTabChange(tab.id)}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-all duration-150 active:scale-95 ${
               activeTab === tab.id
                 ? 'border-amber-500 text-amber-400'
                 : 'border-transparent text-stone-400 hover:text-stone-200'

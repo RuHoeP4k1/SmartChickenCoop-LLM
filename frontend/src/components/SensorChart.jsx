@@ -10,8 +10,13 @@ import { getHistory } from '../api'
 // Each entry needs: key (DB column), label, unit, color, domain (Y-axis range)
 // ---------------------------------------------------------------------------
 const METRICS = [
-  { key: 'temperature_c', label: 'Temperature', unit: '°C', color: '#f97316', domain: ['auto', 'auto'] },
-  { key: 'humidity_pct',  label: 'Humidity',    unit: '%',  color: '#0891b2', domain: [0, 100]         },
+  { key: 'temperature_c',  label: 'Temperature', unit: '°C',   color: '#f97316', domain: ['auto', 'auto'] },
+  { key: 'humidity_pct',   label: 'Humidity',    unit: '%',    color: '#0891b2', domain: [0, 100]         },
+  { key: 'feeder_pct',     label: 'Feeder',      unit: '%',    color: '#16a34a', domain: [0, 100]         },
+  { key: 'waterer_pct',    label: 'Waterer',     unit: '%',    color: '#2563eb', domain: [0, 100]         },
+  { key: 'h2s_ppm',        label: 'H₂S',         unit: 'ppm',  color: '#dc2626', domain: [0, 50]          },
+  { key: 'mold_risk_score',label: 'Mold Risk',   unit: '',     color: '#7c3aed', domain: [0, 100]         },
+  { key: 'chickens_inside',label: 'Chickens',    unit: '',     color: '#d97706', domain: [0, 20]          },
 ]
 
 const RANGES = [
@@ -119,7 +124,7 @@ export default function SensorChart() {
   const xDomain = [Date.now() - (RANGE_MS[range] ?? RANGE_MS['1h']), Date.now()]
 
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl p-5 mt-6">
+    <div className="bg-white border border-stone-200 rounded-2xl p-5 mt-6 transition-all duration-200 hover:shadow-md">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
@@ -174,8 +179,10 @@ export default function SensorChart() {
 
       {/* Chart area */}
       {loading && (
-        <div className="flex items-center justify-center h-56 text-stone-400 text-sm">
-          Loading…
+        <div className="h-56 flex items-end gap-2 px-8 pb-4">
+          {[40,65,30,80,55,70,45,60,35,75,50,68].map((h, i) => (
+            <div key={i} className="skeleton flex-1 rounded-t-md" style={{ height: `${h}%` }} />
+          ))}
         </div>
       )}
       {error && (
