@@ -85,7 +85,7 @@ def load_documents(folder_path: str) -> List:
         for doc in docs:
             doc.metadata["source"] = file_path.name
         documents.extend(docs)
-        print(f"  ✓ Loaded {file_path.name}")
+        print(f"  [OK] Loaded {file_path.name}")
     
     # Load PDF files
     for file_path in Path(folder_path).glob("*.pdf"):
@@ -95,7 +95,7 @@ def load_documents(folder_path: str) -> List:
             metadata={"source": file_path.name}
         )
         documents.append(doc)
-        print(f"  ✓ Loaded {file_path.name} (as Markdown)")
+        print(f"  [OK] Loaded {file_path.name} (as Markdown)")
     
     print(f"Total documents loaded: {len(documents)}")
     return documents
@@ -247,7 +247,7 @@ def build_vector_store(
         vectordb.add_texts(texts=batch_texts, metadatas=batch_meta)
         print(f"  Progress: {min(i + batch_size, len(texts))}/{len(texts)}", end="\r")
 
-    print("\n✓ Vector database built successfully")
+    print("\n[OK] Vector database built successfully")
     _save_fingerprint(persist_dir, folder_path)
     return vectordb
 
@@ -291,7 +291,7 @@ def build_bm25_retriever(chunks: List, k: int = 4) -> BM25Retriever:
     print("Building BM25 keyword retriever...")
     bm25_retriever = BM25Retriever.from_documents(chunks)
     bm25_retriever.k = k
-    print("✓ BM25 retriever ready")
+    print("[OK] BM25 retriever ready")
     return bm25_retriever
 
 

@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Smooth dark mode transition */
+html {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
 /* Hide scrollbar for tab overflow on mobile */
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
@@ -25,4 +30,20 @@
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 0.5rem;
+}
+.dark .skeleton {
+  background: linear-gradient(90deg, #44403c 25%, #57534e 50%, #44403c 75%);
+  background-size: 200% 100%;
+}
+
+/* CSS custom properties for Recharts SVG elements (cannot use Tailwind classes) */
+:root {
+  --chart-grid: #e7e5e4;
+  --chart-tick: #78716c;
+  --chart-axis: #d6d3d1;
+}
+.dark {
+  --chart-grid: #44403c;
+  --chart-tick: #a8a29e;
+  --chart-axis: #57534e;
 }

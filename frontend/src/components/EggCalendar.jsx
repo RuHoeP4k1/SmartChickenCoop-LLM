@@ -11,10 +11,10 @@ function dateKey(year, month, day) {
 }
 
 function cellColor(count) {
-  if (!count)    return 'bg-stone-50 border-stone-200'
-  if (count <= 2) return 'bg-green-50 border-green-200'
-  if (count <= 4) return 'bg-green-100 border-green-300'
-  return 'bg-amber-100 border-amber-300'
+  if (!count)    return 'bg-stone-50 dark:bg-stone-700/40 border-stone-200 dark:border-stone-600'
+  if (count <= 2) return 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50'
+  if (count <= 4) return 'bg-green-100 dark:bg-green-900/30 border-green-300 dark:border-green-700/60'
+  return 'bg-amber-100 dark:bg-amber-900/30 border-amber-300 dark:border-amber-700/60'
 }
 
 function InlineInput({ value, onSave }) {
@@ -39,7 +39,7 @@ function InlineInput({ value, onSave }) {
       onChange={e => setVal(e.target.value)}
       onBlur={commit}
       onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onSave(value || 0) }}
-      className="w-12 text-center bg-white border border-amber-400 rounded-lg px-1 py-0.5 text-sm font-semibold text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+      className="w-12 text-center bg-white dark:bg-stone-700 border border-amber-400 dark:border-amber-500 rounded-lg px-1 py-0.5 text-sm font-semibold text-stone-800 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
     />
   )
 }
@@ -91,38 +91,38 @@ export default function EggCalendar() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-8 bg-stone-100">
+    <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
       <div className="max-w-2xl mx-auto animate-fade-in">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-base font-semibold text-stone-800">Egg Calendar</h2>
-            <p className="text-xs text-stone-500 mt-0.5">Tap a day to log how many eggs were collected</p>
+            <h2 className="text-base font-semibold text-stone-800 dark:text-stone-100">Egg Calendar</h2>
+            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Tap a day to log how many eggs were collected</p>
           </div>
           <div className="text-right">
-            <p className="text-2xl font-bold text-amber-600 tabular-nums">{monthlyTotal}</p>
-            <p className="text-xs text-stone-400">eggs this month</p>
+            <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 tabular-nums">{monthlyTotal}</p>
+            <p className="text-xs text-stone-400 dark:text-stone-500">eggs this month</p>
           </div>
         </div>
 
         {/* Calendar card */}
-        <div className="bg-white border border-stone-200 rounded-2xl p-5">
+        <div className="bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-2xl p-5">
 
           {/* Month navigation */}
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={prevMonth}
-              className="text-stone-400 hover:text-stone-800 transition-colors px-2 py-1 rounded-lg hover:bg-stone-100 active:scale-95"
+              className="text-stone-400 dark:text-stone-500 hover:text-stone-800 dark:hover:text-stone-200 transition-colors px-2 py-1 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700/50 active:scale-95"
             >
               ← Prev
             </button>
-            <h3 className="text-sm font-semibold text-stone-800">
+            <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">
               {MONTH_NAMES[month.month]} {month.year}
             </h3>
             <button
               onClick={nextMonth}
-              className="text-stone-400 hover:text-stone-800 transition-colors px-2 py-1 rounded-lg hover:bg-stone-100 active:scale-95"
+              className="text-stone-400 dark:text-stone-500 hover:text-stone-800 dark:hover:text-stone-200 transition-colors px-2 py-1 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700/50 active:scale-95"
             >
               Next →
             </button>
@@ -131,7 +131,7 @@ export default function EggCalendar() {
           {/* Day-of-week headers */}
           <div className="grid grid-cols-7 gap-1 mb-1">
             {DAYS.map(d => (
-              <div key={d} className="text-center text-xs font-medium text-stone-400 py-1">{d}</div>
+              <div key={d} className="text-center text-xs font-medium text-stone-400 dark:text-stone-500 py-1">{d}</div>
             ))}
           </div>
 
@@ -158,12 +158,12 @@ export default function EggCalendar() {
                     isToday ? 'ring-2 ring-amber-400' : ''
                   }`}
                 >
-                  <span className="text-xs text-stone-400 leading-none mb-0.5">{day}</span>
+                  <span className="text-xs text-stone-400 dark:text-stone-500 leading-none mb-0.5">{day}</span>
                   {isEditing ? (
                     <InlineInput value={count} onSave={v => saveEgg(key, v)} />
                   ) : (
                     count > 0 && (
-                      <span className="text-sm font-bold text-stone-700 tabular-nums">{count}</span>
+                      <span className="text-sm font-bold text-stone-700 dark:text-stone-200 tabular-nums">{count}</span>
                     )
                   )}
                 </div>
@@ -175,14 +175,14 @@ export default function EggCalendar() {
         {/* Legend */}
         <div className="flex items-center justify-center gap-4 mt-4">
           {[
-            { label: 'None', cls: 'bg-stone-50 border-stone-200' },
-            { label: '1–2', cls: 'bg-green-50 border-green-200' },
-            { label: '3–4', cls: 'bg-green-100 border-green-300' },
-            { label: '5+',  cls: 'bg-amber-100 border-amber-300' },
+            { label: 'None', cls: 'bg-stone-50 dark:bg-stone-700/40 border-stone-200 dark:border-stone-600' },
+            { label: '1–2', cls: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50' },
+            { label: '3–4', cls: 'bg-green-100 dark:bg-green-900/30 border-green-300 dark:border-green-700/60' },
+            { label: '5+',  cls: 'bg-amber-100 dark:bg-amber-900/30 border-amber-300 dark:border-amber-700/60' },
           ].map(l => (
             <div key={l.label} className="flex items-center gap-1.5">
               <span className={`w-3 h-3 rounded border ${l.cls}`} />
-              <span className="text-xs text-stone-400">{l.label}</span>
+              <span className="text-xs text-stone-400 dark:text-stone-500">{l.label}</span>
             </div>
           ))}
         </div>

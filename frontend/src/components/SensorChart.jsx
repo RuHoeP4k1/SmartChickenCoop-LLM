@@ -31,8 +31,8 @@ const RANGES = [
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-white border border-stone-200 rounded-xl px-3 py-2.5 shadow-lg text-xs">
-      <p className="text-stone-400 mb-2">
+    <div className="bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl px-3 py-2.5 shadow-lg text-xs">
+      <p className="text-stone-400 dark:text-stone-400 mb-2">
         {new Date(label).toLocaleString([], {
           month: 'short', day: 'numeric',
           hour: '2-digit', minute: '2-digit',
@@ -43,7 +43,7 @@ function ChartTooltip({ active, payload, label }) {
         return (
           <div key={p.dataKey} className="flex items-center gap-2 mb-0.5">
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }} />
-            <span className="text-stone-500">{metric?.label ?? p.dataKey}:</span>
+            <span className="text-stone-500 dark:text-stone-400">{metric?.label ?? p.dataKey}:</span>
             <span className="font-semibold" style={{ color: p.color }}>
               {Number(p.value).toFixed(2)}{metric?.unit ?? ''}
             </span>
@@ -124,19 +124,19 @@ export default function SensorChart() {
   const xDomain = [Date.now() - (RANGE_MS[range] ?? RANGE_MS['1h']), Date.now()]
 
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl p-5 mt-6 transition-all duration-200 hover:shadow-md">
+    <div className="bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-2xl p-5 mt-6 transition-all duration-200 hover:shadow-md">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
-          <h3 className="text-sm font-semibold text-stone-800">Historical Trends</h3>
+          <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Historical Trends</h3>
           {!loading && (
-            <p className="text-xs text-stone-400 mt-0.5">{data.length} readings</p>
+            <p className="text-xs text-stone-400 dark:text-stone-400 mt-0.5">{data.length} readings</p>
           )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Metric picker */}
-          <div className="flex gap-1 bg-stone-100 rounded-lg p-1 border border-stone-200">
+          <div className="flex gap-1 bg-stone-100 dark:bg-stone-700 rounded-lg p-1 border border-stone-200 dark:border-stone-600">
             {METRICS.map(m => {
               const isActive = selected.includes(m.key)
               return (
@@ -145,7 +145,9 @@ export default function SensorChart() {
                   onClick={() => toggleMetric(m.key)}
                   title={isActive ? 'Click to deselect' : selected.length === 2 ? 'Click to swap oldest' : 'Click to add'}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    isActive ? 'bg-white text-stone-800 shadow-sm' : 'text-stone-400 hover:text-stone-600'
+                    isActive
+                      ? 'bg-white dark:bg-stone-600 text-stone-800 dark:text-stone-100 shadow-sm'
+                      : 'text-stone-400 dark:text-stone-400 hover:text-stone-600 dark:hover:text-stone-200'
                   }`}
                 >
                   <span
@@ -159,15 +161,15 @@ export default function SensorChart() {
           </div>
 
           {/* Range selector */}
-          <div className="flex gap-1 bg-stone-100 rounded-lg p-1 border border-stone-200">
+          <div className="flex gap-1 bg-stone-100 dark:bg-stone-700 rounded-lg p-1 border border-stone-200 dark:border-stone-600">
             {RANGES.map(r => (
               <button
                 key={r.value}
                 onClick={() => setRange(r.value)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   range === r.value
-                    ? 'bg-amber-100 text-amber-700 border border-amber-300'
-                    : 'text-stone-400 hover:text-stone-700'
+                    ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700'
+                    : 'text-stone-400 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-200'
                 }`}
               >
                 {r.label}
@@ -186,12 +188,12 @@ export default function SensorChart() {
         </div>
       )}
       {error && (
-        <div className="flex items-center justify-center h-56 text-red-500 text-sm">
+        <div className="flex items-center justify-center h-56 text-red-500 dark:text-red-400 text-sm">
           {error}
         </div>
       )}
       {!loading && !error && data.length === 0 && (
-        <div className="flex items-center justify-center h-56 text-stone-400 text-sm">
+        <div className="flex items-center justify-center h-56 text-stone-400 dark:text-stone-500 text-sm">
           No readings in the past {range}.
         </div>
       )}
@@ -202,7 +204,7 @@ export default function SensorChart() {
             data={data}
             margin={{ top: 4, right: showDual ? 12 : 4, bottom: 4, left: 4 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
 
             <XAxis
               dataKey="timestamp"
@@ -210,8 +212,8 @@ export default function SensorChart() {
               scale="time"
               domain={xDomain}
               tickFormatter={ts => formatTick(ts, range)}
-              tick={{ fill: '#78716c', fontSize: 11 }}
-              axisLine={{ stroke: '#d6d3d1' }}
+              tick={{ fill: 'var(--chart-tick)', fontSize: 11 }}
+              axisLine={{ stroke: 'var(--chart-axis)' }}
               tickLine={false}
               minTickGap={50}
             />

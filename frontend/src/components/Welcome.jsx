@@ -17,11 +17,11 @@ const FEATURES = [
 
 export default function Welcome({ onNavigate }) {
   return (
-    <div className="h-full overflow-y-auto px-6 py-8 bg-stone-100">
+    <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
       <div className="max-w-4xl mx-auto animate-fade-in">
 
         {/* Hero */}
-        <div className="bg-stone-800 rounded-2xl px-8 py-10 mb-8 text-center">
+        <div className="bg-stone-800 dark:bg-stone-800 rounded-2xl px-8 py-10 mb-8 text-center">
           <img
             src={logo}
             alt="ChickenCoopComfort"
@@ -42,32 +42,32 @@ export default function Welcome({ onNavigate }) {
         </div>
 
         {/* Quick-start cards */}
-        <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Quick Start</p>
+        <p className="text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-3">Quick Start</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           {QUICK_LINKS.map(link => (
             <button
               key={link.id}
               onClick={() => onNavigate(link.id)}
-              className="text-left rounded-2xl border border-stone-200 bg-white p-5 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 cursor-pointer"
+              className="text-left rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-5 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-200 cursor-pointer"
             >
               <span className="text-2xl mb-3 block">{link.icon}</span>
-              <h3 className="text-sm font-semibold text-stone-800 mb-1">{link.title}</h3>
-              <p className="text-xs text-stone-500 leading-relaxed">{link.desc}</p>
+              <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100 mb-1">{link.title}</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">{link.desc}</p>
             </button>
           ))}
         </div>
 
         {/* Feature overview */}
-        <p className="text-xs font-semibold text-stone-400 uppercase tracking-widest mb-3">Key Features</p>
+        <p className="text-xs font-semibold text-stone-400 dark:text-stone-500 uppercase tracking-widest mb-3">Key Features</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {FEATURES.map(f => (
             <div
               key={f.title}
-              className="rounded-2xl border border-stone-200 bg-white p-5"
+              className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-5"
             >
               <span className="text-2xl mb-3 block">{f.icon}</span>
-              <h3 className="text-sm font-semibold text-stone-800 mb-1">{f.title}</h3>
-              <p className="text-xs text-stone-500 leading-relaxed">{f.desc}</p>
+              <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100 mb-1">{f.title}</h3>
+              <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">{f.desc}</p>
             </div>
           ))}
         </div>

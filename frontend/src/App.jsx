@@ -27,7 +27,7 @@ export default function App() {
       <div className={activeTab === 'chat'       ? 'h-full' : 'hidden'}><ChatPanel /></div>
       <div className={activeTab === 'sensors'    ? 'h-full' : 'hidden'}><SensorDashboard /></div>
       <div className={activeTab === 'charts'     ? 'h-full' : 'hidden'}>
-        <div className="h-full overflow-y-auto px-6 py-8 bg-stone-100">
+        <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
           <div className="max-w-4xl mx-auto animate-fade-in">
             <SensorChart />
           </div>
