@@ -164,8 +164,8 @@ def main():
         semantic_contexts = [doc.page_content for doc in semantic_result["documents"]]
 
         # --- Heuristic scores ---
-        hybrid_heuristic = evaluate_answer_quality(hybrid_result["answer"], expected_topics)
-        semantic_heuristic = evaluate_answer_quality(semantic_result["answer"], expected_topics)
+        hybrid_heuristic = evaluate_answer_quality(hybrid_result["answer"], expected_topics, tc["category"])
+        semantic_heuristic = evaluate_answer_quality(semantic_result["answer"], expected_topics, tc["category"])
 
         hybrid_samples.append(
             SingleTurnSample(

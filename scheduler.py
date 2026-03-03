@@ -103,6 +103,7 @@ def check_sensors():
                 bm25_retriever=_bm25_retriever,
                 use_sensors=True,
                 use_hybrid=True,
+                sensor_data=reading,
             )
 
             insert_event(

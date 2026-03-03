@@ -299,6 +299,10 @@ def build_bm25_retriever(chunks: List, k: int = 4) -> BM25Retriever:
 # HYBRID RETRIEVAL (SEMANTIC + KEYWORD)
 # =============================================================================
 
+_cached_ensemble = None
+_cached_ensemble_k = None
+
+
 def hybrid_search(
     vectordb: Chroma,
     bm25_retriever: BM25Retriever,
@@ -307,34 +311,34 @@ def hybrid_search(
 ) -> List:
     """
     Perform hybrid search combining semantic (Chroma) and keyword (BM25).
-    
+    Caches the EnsembleRetriever so it isn't rebuilt on every call.
+
     Args:
         vectordb: Chroma vector database
         bm25_retriever: BM25 retriever
         query: Search query
         k: Number of results to return
-    
+
     Returns:
         List of relevant documents
     """
-    # Create semantic retriever
-    semantic_retriever = vectordb.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": k, "fetch_k": k*3}
-    )
+    global _cached_ensemble, _cached_ensemble_k
 
-    # Sync BM25 k to match the requested k
-    bm25_retriever.k = k
+    if _cached_ensemble is None or _cached_ensemble_k != k:
+        semantic_retriever = vectordb.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": k*3}
+        )
+        bm25_retriever.k = k
 
-    # Combine both retrievers
-    # 60% weight to semantic, 40% to keyword
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[semantic_retriever, bm25_retriever],
-        weights=[0.6, 0.4]
-    )
-    
-    results = ensemble_retriever.invoke(query)
-    return results[:k]  # Limit to k results
+        _cached_ensemble = EnsembleRetriever(
+            retrievers=[semantic_retriever, bm25_retriever],
+            weights=[0.6, 0.4]
+        )
+        _cached_ensemble_k = k
+
+    results = _cached_ensemble.invoke(query)
+    return results[:k]
 
 
 # =============================================================================
@@ -444,6 +448,7 @@ def answer_query(
     use_hybrid: bool = True,
     k: int = 4,
     history: list = None,
+    sensor_data: Dict = None,
 ) -> Dict:
     """
     Complete RAG pipeline: retrieve relevant chunks, build prompt, generate answer.
@@ -456,18 +461,19 @@ def answer_query(
         use_hybrid:      Whether to use hybrid retrieval (vs semantic only)
         k:               Number of chunks to retrieve
         history:         Recent conversation history for context
+        sensor_data:     Pre-fetched sensor reading (skips DB call if provided)
 
     Returns:
         Dictionary with answer, sources, and metadata
     """
 
     # Step 1: Get sensor data if enabled
-    sensor_data = None
     sensor_context = None
     has_critical = False
 
     if use_sensors:
-        sensor_data = get_latest_sensor_reading()
+        if sensor_data is None:
+            sensor_data = get_latest_sensor_reading()
         if sensor_data and should_include_sensors(query, sensor_data):
             sensor_context = get_sensor_context(sensor_data)
             critical_alerts = get_critical_alerts(sensor_data)

@@ -27,7 +27,7 @@ You do NOT need to write code here. Just fill in the text between the triple quo
 # explaining your reasoning. This could lead to a better prompt design.
 # ---------------------------------------------------------------------------
 
-ACTIONABILITY_CRITERIA = “””
+ACTIONABILITY_CRITERIA = """
 Note: Match the standard to the question type. A factual question (“how often do chickens lay?”) is fully
 actionable when it gives a clear, usable answer. A problem question (“my chicken won't eat”) is only
 actionable when it tells the user something concrete to do. Do NOT penalise a short, direct answer for
@@ -54,7 +54,7 @@ Score 3 (Genuinely helpful):
 - The answer fits the scope of the question — a simple question gets a focused answer, a complex
   situation gets appropriately more detail.
 - A hobby keeper reading this answer knows what to do or think next without needing to search further.
-“””
+"""
 
 # 👆 Replace everything between the triple quotes, keeping the variable name.
 
@@ -75,7 +75,7 @@ Score 3 (Genuinely helpful):
 # as a comment. Prompt design suggestions are very welcome.
 # ---------------------------------------------------------------------------
 
-CORRECTNESS_CRITERIA = “””
+CORRECTNESS_CRITERIA = """
 Note: We score “safe, sensible, and appropriate” advice for hobby chicken keepers — not scientific depth.
 Vet referrals are only relevant when the question involves a genuine health or injury concern. Do NOT
 penalise an answer about egg-laying frequency or feed ratios for failing to mention a vet.
@@ -102,5 +102,5 @@ Score 3 (Correct and appropriate):
   answer; a health question acknowledges limits of home care and mentions professional help only
   when that is genuinely warranted by the situation described.
 - A hobby keeper acting on this answer will not be misled or put their birds at risk.
-“””
+"""
 # 👆 Replace everything between the triple quotes, keeping the variable name.
