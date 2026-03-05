@@ -15,18 +15,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Database connection configuration — reads from .env, falls back to defaults
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "database": os.getenv("DB_NAME", "chickens"),
-    "user": os.getenv("DB_USER", "postgres"),
-    "password": os.getenv("DB_PASSWORD", ""),
-    "port": int(os.getenv("DB_PORT", "5432"))
-}
+# ── Connection config ──────────────────────────────────────────────────────────
+# Priority: DATABASE_URL (Supabase / any hosted Postgres)
+#           → individual DB_* vars (local Postgres)
+#
+# To switch to Supabase: set DATABASE_URL in .env and leave DB_* as fallbacks.
+# To switch back to local: clear DATABASE_URL (or comment it out).
+_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-# Connection pool — reuses connections instead of opening/closing each call.
-# minconn=1 keeps one connection warm; maxconn=5 is plenty for API + scheduler.
-_pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
+if _DATABASE_URL:
+    # Hosted Postgres / Supabase — single connection string
+    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, dsn=_DATABASE_URL)
+    print(f"[DB] Connected via DATABASE_URL (Supabase / hosted Postgres)")
+else:
+    # Local Postgres — individual vars
+    DB_CONFIG = {
+        "host": os.getenv("DB_HOST", "localhost"),
+        "database": os.getenv("DB_NAME", "chickens"),
+        "user": os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD", ""),
+        "port": int(os.getenv("DB_PORT", "5432")),
+    }
+    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
+    print(f"[DB] Connected to local Postgres ({DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']})")
+
 atexit.register(lambda: _pool.closeall() if _pool and not _pool.closed else None)
 
 

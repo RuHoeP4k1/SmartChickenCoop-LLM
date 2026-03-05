@@ -113,6 +113,7 @@ def check_sensors():
                 llm_response=result["answer"],
                 sensor_snapshot=reading,
                 sensor_context_filtered=result["sensor_context"],
+                sources=result.get("sources"),
             )
             return
         except Exception as e:
@@ -132,137 +133,206 @@ def check_sensors():
 # Enabled by SIMULATION_MODE=true in .env  (switch off → set to false + restart)
 # ---------------------------------------------------------------------------
 
-_SIM_SCENARIOS = {
-    "normal": {
-        "temperature_c": lambda: random.uniform(20, 24),
-        "temperature_status": "normal",
-        "humidity_pct": lambda: random.uniform(50, 70),
-        "humidity_status": "normal",
-        "heat_stress_index": "normal",
-        "feeder_status": "full",
-        "waterer_status": "full",
-        "feeder_pct": lambda: random.uniform(70, 100),
-        "waterer_pct": lambda: random.uniform(70, 100),
-        "chickens_inside": lambda: random.randint(8, 12),
-        "egg_count": lambda: random.randint(0, 5),
-        "h2s_ppm": lambda: random.uniform(0, 2),
-        "h2s_level": "normal",
-        "mold_risk_score": lambda: random.uniform(0, 20),
-        "mold_risk_status": "normal",
-        "door_open": False,
-        "ventilation_on": False,
-    },
-    "hot_day": {
-        "temperature_c": lambda: random.uniform(28, 32),
-        "temperature_status": "warning",
-        "humidity_pct": lambda: random.uniform(65, 80),
-        "humidity_status": "warning",
-        "heat_stress_index": "warning",
-        "feeder_status": lambda: random.choice(["full", "full", "low"]),
-        "waterer_status": lambda: random.choice(["full", "low"]),
-        "feeder_pct": lambda: random.uniform(40, 80),
-        "waterer_pct": lambda: random.uniform(30, 70),
-        "chickens_inside": lambda: random.randint(5, 10),
-        "egg_count": lambda: random.randint(0, 3),
-        "h2s_ppm": lambda: random.uniform(1, 5),
-        "h2s_level": "normal",
-        "mold_risk_score": lambda: random.uniform(20, 50),
-        "mold_risk_status": lambda: random.choice(["normal", "warning"]),
-        "door_open": True,
-        "ventilation_on": True,
-    },
-    "critical": {
-        "temperature_c": lambda: random.uniform(35, 38),
-        "temperature_status": "critical",
-        "humidity_pct": lambda: random.uniform(80, 90),
-        "humidity_status": "critical",
-        "heat_stress_index": "critical",
-        "feeder_status": lambda: random.choice(["low", "empty"]),
-        "waterer_status": lambda: random.choice(["low", "empty"]),
-        "feeder_pct": lambda: random.uniform(5, 25),
-        "waterer_pct": lambda: random.uniform(5, 20),
-        "chickens_inside": lambda: random.randint(2, 8),
-        "egg_count": 0,
-        "h2s_ppm": lambda: random.uniform(10, 25),
-        "h2s_level": lambda: random.choice(["warning", "critical"]),
-        "mold_risk_score": lambda: random.uniform(60, 95),
-        "mold_risk_status": "critical",
-        "door_open": lambda: random.choice([True, False]),
-        "ventilation_on": False,
-    },
-    "cold_night": {
-        "temperature_c": lambda: random.uniform(8, 14),
-        "temperature_status": "warning",
-        "humidity_pct": lambda: random.uniform(60, 75),
-        "humidity_status": "normal",
-        "heat_stress_index": "normal",
-        "feeder_status": "full",
-        "waterer_status": "full",
-        "feeder_pct": lambda: random.uniform(60, 100),
-        "waterer_pct": lambda: random.uniform(60, 100),
-        "chickens_inside": lambda: random.randint(10, 14),
-        "egg_count": lambda: random.randint(0, 8),
-        "h2s_ppm": lambda: random.uniform(0, 3),
-        "h2s_level": "normal",
-        "mold_risk_score": lambda: random.uniform(30, 60),
-        "mold_risk_status": lambda: random.choice(["normal", "warning"]),
-        "door_open": False,
-        "ventilation_on": lambda: random.choice([True, False]),
-    },
-    "resource_low": {
-        "temperature_c": lambda: random.uniform(20, 24),
-        "temperature_status": "normal",
-        "humidity_pct": lambda: random.uniform(50, 65),
-        "humidity_status": "normal",
-        "heat_stress_index": "normal",
-        "feeder_status": "low",
-        "waterer_status": "low",
-        "feeder_pct": lambda: random.uniform(5, 20),
-        "waterer_pct": lambda: random.uniform(5, 20),
-        "chickens_inside": lambda: random.randint(8, 12),
-        "egg_count": lambda: random.randint(0, 4),
-        "h2s_ppm": lambda: random.uniform(0, 3),
-        "h2s_level": "normal",
-        "mold_risk_score": lambda: random.uniform(10, 35),
-        "mold_risk_status": "normal",
-        "door_open": False,
-        "ventilation_on": False,
-    },
-}
+# ---------------------------------------------------------------------------
+# Continuous-drift simulation state
+# Values drift smoothly toward time-of-day targets; discrete fields are
+# derived from numeric values so the dashboard shows in-between states.
+# ---------------------------------------------------------------------------
+
+def _temp_target(hour: int) -> float:
+    """Baseline temperature target for time of day (sine-ish curve)."""
+    # Peaks ~14:00, trough ~04:00
+    import math
+    return 22 + 10 * math.sin(math.pi * (hour - 4) / 12) if 4 <= hour <= 16 else \
+           22 + 10 * math.sin(math.pi * (hour - 4) / 12)
 
 
-def _resolve(val):
-    return val() if callable(val) else val
+def _humidity_target(temp: float) -> float:
+    """Humidity rises with temperature (inverse relationship, simplified)."""
+    return max(40, min(90, 75 - (temp - 22) * 0.8))
+
+
+def _classify_temp(t: float):
+    if t >= 35:
+        return "critical"
+    if t >= 28 or t <= 10:
+        return "warning"
+    return "normal"
+
+
+def _classify_humidity(h: float):
+    if h >= 85 or h < 30:
+        return "critical"
+    if h >= 75 or h < 40:
+        return "warning"
+    return "normal"
+
+
+def _classify_heat_stress(t: float, h: float):
+    hi = t + 0.33 * h - 4  # simplified heat index
+    if hi >= 40 or t >= 35:
+        return "critical"
+    if hi >= 30 or t >= 28:
+        return "warning"
+    return "normal"
+
+
+def _classify_h2s(ppm: float):
+    if ppm >= 10:
+        return "critical"
+    if ppm >= 5:
+        return "warning"
+    return "normal"
+
+
+def _classify_mold(score: float):
+    if score >= 70:
+        return "critical"
+    if score >= 40:
+        return "warning"
+    return "normal"
+
+
+def _feeder_status(pct: float):
+    if pct < 15:
+        return "empty"
+    if pct < 35:
+        return "low"
+    return "full"
+
+
+def _waterer_status(pct: float):
+    if pct < 15:
+        return "empty"
+    if pct < 35:
+        return "low"
+    return "full"
+
+
+def _drift(current: float, target: float, speed: float, noise: float) -> float:
+    """Move current toward target by speed fraction, add noise."""
+    return current + (target - current) * speed + random.gauss(0, noise)
+
+
+# Persistent sim state — initialised on first use
+_sim_state: dict | None = None
+_sim_event_ticks = 0   # >0 means an event is active
+
+
+def _init_sim_state():
+    hour = datetime.now().hour
+    t = _temp_target(hour) + random.gauss(0, 2)
+    h = _humidity_target(t) + random.gauss(0, 3)
+    return {
+        "temperature_c": t,
+        "humidity_pct": h,
+        "feeder_pct": random.uniform(60, 95),
+        "waterer_pct": random.uniform(60, 95),
+        "h2s_ppm": random.uniform(0, 2),
+        "mold_risk_score": random.uniform(10, 30),
+        "chickens_inside": random.randint(8, 12),
+        "egg_count": random.randint(0, 5),
+        "door_open": False,
+        "ventilation_on": False,
+    }
 
 
 def _sim_insert_reading():
     """
-    Simulation mode: insert one synthetic sensor reading.
-    Scenario follows a realistic daily temperature pattern.
+    Simulation mode: drift the continuous sensor state and insert one reading.
+    Values evolve smoothly; status strings are derived from numeric values.
+    Occasional short events (h2s spike, resource drain, heat wave) add variety.
     """
-    hour = datetime.now().hour
-    if 6 <= hour < 10:
-        scenario = "normal"
-    elif 10 <= hour < 14:
-        scenario = "hot_day"
-    elif 14 <= hour < 16:
-        scenario = random.choice(["hot_day", "critical"])
-    elif 16 <= hour < 20:
-        scenario = "hot_day"
-    elif 20 <= hour < 22:
-        scenario = "normal"
-    else:
-        scenario = "cold_night"
-    r = random.random()
-    if r < 0.20:
-        scenario = "critical"
-    elif r < 0.30:
-        scenario = "resource_low"
+    global _sim_state, _sim_event_ticks
 
-    reading = {k: _resolve(v) for k, v in _SIM_SCENARIOS[scenario].items()}
+    if _sim_state is None:
+        _sim_state = _init_sim_state()
+
+    hour = datetime.now().hour
+    s = _sim_state
+
+    # ---- determine targets for this tick ----
+    t_target = _temp_target(hour)
+    h_target = _humidity_target(s["temperature_c"])
+
+    # Random short events (5% chance each tick, lasts ~3 ticks = ~3 min)
+    if _sim_event_ticks <= 0 and random.random() < 0.05:
+        event = random.choice(["h2s_spike", "heat_wave", "resource_drain", "cold_snap"])
+        logger.debug(f"Sim event triggered: {event}")
+        if event == "h2s_spike":
+            s["h2s_ppm"] = random.uniform(12, 22)
+        elif event == "heat_wave":
+            t_target = random.uniform(36, 39)
+        elif event == "resource_drain":
+            s["feeder_pct"] = max(5, s["feeder_pct"] - random.uniform(30, 50))
+            s["waterer_pct"] = max(5, s["waterer_pct"] - random.uniform(20, 40))
+        elif event == "cold_snap":
+            t_target = random.uniform(5, 12)
+        _sim_event_ticks = random.randint(2, 4)
+    elif _sim_event_ticks > 0:
+        _sim_event_ticks -= 1
+
+    # ---- drift numeric values toward targets ----
+    s["temperature_c"] = _drift(s["temperature_c"], t_target, speed=0.15, noise=0.4)
+    s["humidity_pct"] = _drift(s["humidity_pct"], h_target, speed=0.12, noise=1.0)
+    s["h2s_ppm"] = max(0, _drift(s["h2s_ppm"], 1.0, speed=0.20, noise=0.3))
+    s["mold_risk_score"] = max(0, min(100,
+        _drift(s["mold_risk_score"],
+               20 + (s["humidity_pct"] - 55) * 0.8,
+               speed=0.08, noise=1.5)))
+
+    # Resources deplete slowly, reset if refilled (probabilistic refill)
+    s["feeder_pct"] = max(0, s["feeder_pct"] - random.uniform(0.1, 0.5))
+    s["waterer_pct"] = max(0, s["waterer_pct"] - random.uniform(0.1, 0.6))
+    if s["feeder_pct"] < 10 and random.random() < 0.15:
+        s["feeder_pct"] = random.uniform(80, 100)   # refilled
+    if s["waterer_pct"] < 10 and random.random() < 0.15:
+        s["waterer_pct"] = random.uniform(80, 100)
+
+    # Chickens drift based on time (more inside at night)
+    inside_target = 12 if (hour >= 20 or hour < 6) else random.uniform(6, 10)
+    s["chickens_inside"] = int(round(max(0, min(14,
+        _drift(s["chickens_inside"], inside_target, speed=0.1, noise=0.5)))))
+
+    # Egg count: slow accumulation during day, reset chance at end of day
+    if 8 <= hour <= 14 and random.random() < 0.3:
+        s["egg_count"] = min(s["egg_count"] + 1, 15)
+    elif hour >= 20 and random.random() < 0.1:
+        s["egg_count"] = 0   # collected
+
+    # Door and ventilation logic
+    temp = s["temperature_c"]
+    s["ventilation_on"] = temp >= 28 or s["h2s_ppm"] >= 5
+    s["door_open"] = 6 <= hour <= 20 and temp < 35
+
+    # ---- build reading with derived status fields ----
+    reading = {
+        "temperature_c": round(s["temperature_c"], 2),
+        "temperature_status": _classify_temp(s["temperature_c"]),
+        "humidity_pct": round(s["humidity_pct"], 2),
+        "humidity_status": _classify_humidity(s["humidity_pct"]),
+        "heat_stress_index": _classify_heat_stress(s["temperature_c"], s["humidity_pct"]),
+        "feeder_pct": round(s["feeder_pct"], 1),
+        "feeder_status": _feeder_status(s["feeder_pct"]),
+        "waterer_pct": round(s["waterer_pct"], 1),
+        "waterer_status": _waterer_status(s["waterer_pct"]),
+        "chickens_inside": s["chickens_inside"],
+        "egg_count": s["egg_count"],
+        "h2s_ppm": round(s["h2s_ppm"], 2),
+        "h2s_level": _classify_h2s(s["h2s_ppm"]),
+        "mold_risk_score": round(s["mold_risk_score"], 1),
+        "mold_risk_status": _classify_mold(s["mold_risk_score"]),
+        "door_open": s["door_open"],
+        "ventilation_on": s["ventilation_on"],
+    }
+
     try:
         insert_sensor_reading(reading)
-        logger.debug(f"Sim: inserted '{scenario}' reading")
+        logger.debug(
+            f"Sim: T={reading['temperature_c']}°C H={reading['humidity_pct']}% "
+            f"feeder={reading['feeder_pct']}% h2s={reading['h2s_ppm']}ppm "
+            f"[{reading['temperature_status']}]"
+        )
     except Exception as e:
         logger.error(f"Sim: failed to insert reading: {e}")
 
