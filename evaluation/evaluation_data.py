@@ -106,4 +106,184 @@ TEST_CASES = [
                         "Predators often dig into pens or grab birds through weak spots, so check for gaps, digging areas, and damaged wire regularly."
                         "Practically, repair holes immediately, reinforce fencing, and ensure doors are closed daily to maintain a safe, controlled environment.",
     },
+    {
+        "question": "How often should I clean my chicken coop?",
+        "category": "management",
+        "expected_topics": ["clean", "coop", "litter"],
+        "ground_truth": "Chicken coops should be cleaned regularly to prevent disease organisms from building up in the environment."
+                        "Daily tasks include removing droppings, refreshing water, and checking feed."
+                        "Litter should be replaced periodically and the coop should receive a thorough deep cleaning at least once per year."
+                        "Keeping bedding dry and clean helps reduce disease and maintain flock health.",
+    },
+    {
+        "question": "How much water do chickens need per day?",
+        "category": "nutrition",
+        "expected_topics": ["water", "hydration", "clean", "daily"],
+        "ground_truth": "Chickens must have constant access to fresh, clean drinking water throughout the day."
+                        "Waterers should be cleaned and refilled daily to prevent bacteria or algae buildup."
+                        "Feeders and waterers should contain enough supply so the flock never runs out."
+                        "Reduced water intake can quickly affect egg production and overall flock health.",
+    },
+    {
+        "question": "Why are my chickens losing feathers?",
+        "category": "health",
+        "expected_topics": ["feathers", "parasites", "pecking", "mites"],
+        "ground_truth": "Feather loss can occur due to parasites, disease, or aggressive pecking within the flock."
+                        "External parasites such as lice or mites can damage feathers and reduce production."
+                        "Feather pecking may also remove feathers when birds are stressed or overcrowded."
+                        "Check birds regularly for parasites and manage space and flock conditions to prevent feather damage.",
+    },
+    {
+        "question": "How can I tell if my chicken is sick?",
+        "category": "health",
+        "expected_topics": ["symptoms", "lethargy", "vet", "egg"],
+        "ground_truth": "Chickens often hide illness, so watch for warning signs such as lethargy, ruffled feathers, diarrhea, or reduced egg production."
+                        "Other symptoms include coughing, sneezing, discharge from the eyes or nostrils, and weight loss."
+                        "Daily observation helps detect these problems early."
+                        "If multiple birds show symptoms, seek veterinary advice to diagnose the illness.",
+    },
+    {
+        "question": "What predators attack backyard chickens?",
+        "category": "management",
+        "expected_topics": ["predator", "raccoon", "hawk", "fox"],
+        "ground_truth": "Many predators prey on backyard chickens including raccoons, foxes, hawks, owls, dogs, and rats."
+                        "Signs of predator attacks include scattered feathers, missing birds, or partially eaten carcasses."
+                        "Some predators hunt during the day while others attack at night."
+                        "Recognizing predator signs helps chicken keepers improve coop protection.",
+    },
+    {
+        "question": "How can I protect my chickens from predators?",
+        "category": "management",
+        "expected_topics": ["predator", "fenc", "coop", "secur"], #misspelled on purpose
+        "ground_truth": "Secure housing and fencing are essential to protect chickens from predators."
+                        "Birds should be kept in enclosed coops or fenced runs that prevent animals from digging or reaching through wire."
+                        "Regularly inspect the coop for holes, weak spots, or damaged fencing."
+                        "Fixing these vulnerabilities helps keep predators out and chickens safe.",
+    },
+    {
+        "question": "Why are my chickens not laying eggs?",
+        "category": "general",
+        "expected_topics": ["egg", "production", "stress", "nutrition"],
+        "ground_truth": "Egg production can decrease due to illness, stress, or poor nutrition."
+                        "Sick birds may also show signs such as lethargy, weight loss, or reduced appetite."
+                        "Nutritional deficiencies or poor housing conditions can also lower egg production."
+                        "Maintaining proper diet, housing, and health checks helps support consistent egg laying.",
+    },
+    {
+        "question": "How do I introduce new chickens to my flock?",
+        "category": "management",
+        "expected_topics": ["quarantine", "isolate", "flock", "disease"],
+        "ground_truth": "New chickens should be isolated from the existing flock for several weeks before introduction."
+                        "This quarantine period allows you to monitor the birds for signs of disease."
+                        "After quarantine, introduce them gradually to reduce stress and aggression."
+                        "Proper isolation helps prevent disease transmission within the flock.",
+    },
+    {
+        "question": "What are the signs of heat stress in chickens?",
+        "category": "environment",
+        "expected_topics": ["heat stress", "panting", "wings", "temperature"],
+        "ground_truth": "Chickens suffering from heat stress may pant rapidly and hold their wings away from their bodies."
+                        "They may also eat less and show reduced productivity."
+                        "If many birds show these signs, the environment is likely too hot."
+                        "Providing shade, ventilation, and cool water helps reduce heat stress.",
+    },
+    {
+        "question": "How can I keep my chickens cool in summer?",
+        "category": "seasonal",
+        "expected_topics": ["summer", "cool", "shade", "ventilation"],
+        "ground_truth": "To keep chickens cool in summer, provide shade, fresh drinking water, and good airflow."
+                        "Ventilation helps remove heat from the coop and keeps temperatures manageable."
+                        "Avoid overcrowding so birds can spread out and stay cool."
+                        "These practices help reduce heat stress during hot weather.",
+    },
+    {
+        "question": "How can I prevent diseases in my flock?",
+        "category": "health",
+        "expected_topics": [ "sanitation", "disease", "prevention"],
+        "ground_truth": "Disease prevention relies on good biosecurity practices such as isolating new birds and limiting outside contact."
+                        "Clean housing, equipment, and proper sanitation reduce the spread of pathogens."
+                        "Controlling rodents and insects also helps prevent disease transmission."
+                        "Following these practices helps maintain a healthy flock.",
+    },
+    {
+        "question": "Why are my chickens making loud noises?",
+        "category": "behavior",
+        "expected_topics": ["noise", "stress", "predator", "disturbance"],
+        "ground_truth": "Chickens may make loud noises due to stress or disturbances in their environment."
+                        "Predator threats, sudden noises, or flock conflicts can trigger alarm calls."
+                        "Birds may also become noisy during stressful conditions such as overcrowding."
+                        "Ensuring safe housing and reducing disturbances helps keep birds calm.",
+    },
+    {
+        "question": "What bedding should I use in my chicken coop?",
+        "category": "housing",
+        "expected_topics": ["bedding", "litter", "moisture", "coop"],
+        "ground_truth": "Chicken coop bedding should be a loose and absorbent material such as wood shavings."
+                        "Good litter absorbs moisture and provides insulation from the floor."
+                        "It also allows chickens to perform natural behaviors like scratching and dust bathing."
+                        "Wet bedding should be removed promptly to maintain coop hygiene.",
+    },
+    {
+        "question": "How often should I check my chickens for parasites?",
+        "category": "health",
+        "expected_topics": ["parasite", "mite", "lice", "inspect"],
+        "ground_truth": "Chickens should be checked regularly for parasites, ideally at least once per week."
+                        "External parasites such as mites or lice can damage feathers and reduce productivity."
+                        "Early detection prevents infestations from spreading through the flock."
+                        "Routine health inspections help maintain overall flock health.",
+    },
+    {
+        "question": "Why are my chickens fighting each other?",
+        "category": "behavior",
+        "expected_topics": ["pecking order", "fight", "space", "stress"],
+        "ground_truth": "Chickens establish a social hierarchy known as the pecking order."
+                        "Fighting may occur when birds compete for dominance or when resources are limited."
+                        "Overcrowding and stress can increase aggressive behavior."
+                        "Providing adequate space and resources helps reduce fighting within the flock.",
+    },
+    {
+        "question": "How many chickens should I keep in one flock?",
+        "category": "management",
+        "expected_topics": ["flock size", "space", "stocking density", "welfare"],
+        "ground_truth": "The number of chickens in a flock should match the available space and housing conditions."
+                        "High stocking density increases stress and competition between birds."
+                        "Adequate space and resources improve welfare and reduce aggressive behavior."
+                        "Keepers should adjust flock size to maintain healthy living conditions.",
+    },
+    {
+        "question": "When do chickens start laying eggs?",
+        "category": "general",
+        "expected_topics": ["sexual maturity", "egg", "laying", "produc"],
+        "ground_truth": "Most hens begin laying eggs once they reach sexual maturity, usually around 19 weeks of age."
+                        "At this stage they require a balanced layer diet to support egg production."
+                        "Proper nutrition and health management help maintain consistent laying."
+                        "Healthy hens can produce eggs frequently under good conditions.",
+    },
+    {
+        "question": "How do I keep rodents away from my chicken coop?",
+        "category": "management",
+        "expected_topics": ["rodent", "feed", "control", "coop"],
+        "ground_truth": "Rodents are attracted to chicken coops because they provide food, water, and shelter."
+                        "Rats and mice can contaminate feed and cause significant losses."
+                        "Remove spilled feed, seal entry holes, and maintain rodent control programs."
+                        "Regular inspection helps prevent rodent infestations.",
+    },
+    {
+        "question": "How can I tell if my chicken has parasites?",
+        "category": "health",
+        "expected_topics": ["parasite", "symptom", "feather", "weight loss"],
+        "ground_truth": "Parasites may cause symptoms such as weight loss, droopiness, and feather damage."
+                        "External parasites may appear as insects or specks around feathers or the vent area."
+                        "Internal parasites can cause diarrhea or weakness."
+                        "Regular health checks help detect parasite problems early.",
+    },
+    {
+        "question": "Why are my chickens laying thin-shelled eggs?",
+        "category": "nutrition",
+        "expected_topics": ["egg", "calcium", "vitamin D", "nutrition", "diet"],
+        "ground_truth": "Thin-shelled eggs are often caused by insufficient calcium or vitamin D in the diet."
+                        "Egg production requires large amounts of calcium to form strong shells."
+                        "If the diet lacks calcium, hens may draw it from their bones."
+                        "Providing oyster shell and balanced nutrition helps maintain strong eggshell quality.",
+    },
 ]
