@@ -4,177 +4,253 @@ Creates realistic sensor readings in PostgreSQL for testing
 """
 
 from datetime import datetime, timedelta
+import math
 import random
 from db_utils import insert_sensor_reading, setup_database
 
 
+# ---------------------------------------------------------------------------
+# Continuous-state generator (same logic as scheduler.py simulation)
+# Values drift smoothly; status strings derived from numeric values.
+# ---------------------------------------------------------------------------
+
+def _temp_target(hour: int) -> float:
+    """Baseline temperature target by time of day (smooth sine curve)."""
+    return 22 + 10 * math.sin(math.pi * (hour - 4) / 12)
+
+
+def _classify_temp(t):
+    if t >= 35: return "critical"
+    if t >= 28 or t <= 10: return "warning"
+    return "normal"
+
+def _classify_humidity(h):
+    if h >= 85 or h < 30: return "critical"
+    if h >= 75 or h < 40: return "warning"
+    return "normal"
+
+def _classify_heat_stress(t, h):
+    hi = t + 0.33 * h - 4
+    if hi >= 40 or t >= 35: return "critical"
+    if hi >= 30 or t >= 28: return "warning"
+    return "normal"
+
+def _classify_h2s(ppm):
+    if ppm >= 10: return "critical"
+    if ppm >= 5: return "warning"
+    return "normal"
+
+def _classify_mold(score):
+    if score >= 70: return "critical"
+    if score >= 40: return "warning"
+    return "normal"
+
+def _feeder_status(pct):
+    if pct < 15: return "empty"
+    if pct < 35: return "low"
+    return "full"
+
+def _waterer_status(pct):
+    if pct < 15: return "empty"
+    if pct < 35: return "low"
+    return "full"
+
+def _drift(cur, target, speed, noise):
+    return cur + (cur - target) * -speed + random.gauss(0, noise)
+
+
+def _make_timeline_state(timestamps):
+    """
+    Walk through timestamps in order, drifting a continuous state.
+    Yields one reading dict per timestamp.
+    """
+    # Initial state
+    t0 = timestamps[0]
+    hour0 = t0.hour
+    temp = _temp_target(hour0) + random.gauss(0, 1)
+    hum  = max(40, min(90, 75 - (temp - 22) * 0.8)) + random.gauss(0, 2)
+    feeder = random.uniform(80, 100)
+    waterer = random.uniform(80, 100)
+    h2s = random.uniform(0, 2)
+    mold = random.uniform(10, 30)
+    inside = random.uniform(8, 12)
+    eggs = 0
+    event_ticks = 0
+
+    for ts in timestamps:
+        hour = ts.hour
+        t_target = _temp_target(hour)
+        h_target = max(40, min(90, 75 - (temp - 22) * 0.8))
+
+        # Occasional events
+        if event_ticks <= 0 and random.random() < 0.04:
+            event = random.choice(["h2s_spike", "heat_wave", "resource_drain", "cold_snap"])
+            if event == "h2s_spike":
+                h2s = random.uniform(12, 22)
+            elif event == "heat_wave":
+                t_target = random.uniform(36, 39)
+            elif event == "resource_drain":
+                feeder = max(5, feeder - random.uniform(25, 45))
+                waterer = max(5, waterer - random.uniform(20, 35))
+            elif event == "cold_snap":
+                t_target = random.uniform(5, 12)
+            event_ticks = random.randint(2, 5)
+        elif event_ticks > 0:
+            event_ticks -= 1
+
+        temp   = _drift(temp,   t_target, speed=0.15, noise=0.4)
+        hum    = max(30, min(95, _drift(hum, h_target, speed=0.12, noise=1.0)))
+        h2s    = max(0, _drift(h2s, 1.0, speed=0.20, noise=0.3))
+        mold   = max(0, min(100, _drift(mold, 20 + (hum - 55) * 0.8, speed=0.08, noise=1.5)))
+
+        feeder = max(0, feeder - random.uniform(0.05, 0.3))
+        waterer = max(0, waterer - random.uniform(0.05, 0.35))
+        if feeder < 10 and random.random() < 0.12:
+            feeder = random.uniform(80, 100)
+        if waterer < 10 and random.random() < 0.12:
+            waterer = random.uniform(80, 100)
+
+        inside_target = 12 if (hour >= 20 or hour < 6) else random.uniform(6, 10)
+        inside = max(0, min(14, _drift(inside, inside_target, speed=0.1, noise=0.5)))
+
+        if 8 <= hour <= 14 and random.random() < 0.25:
+            eggs = min(eggs + 1, 15)
+        elif hour >= 20 and random.random() < 0.08:
+            eggs = 0
+
+        ventilation_on = temp >= 28 or h2s >= 5
+        door_open = 6 <= hour <= 20 and temp < 35
+
+        yield {
+            "timestamp": ts,
+            "temperature_c": round(temp, 2),
+            "temperature_status": _classify_temp(temp),
+            "humidity_pct": round(hum, 2),
+            "humidity_status": _classify_humidity(hum),
+            "heat_stress_index": _classify_heat_stress(temp, hum),
+            "feeder_pct": round(feeder, 1),
+            "feeder_status": _feeder_status(feeder),
+            "waterer_pct": round(waterer, 1),
+            "waterer_status": _waterer_status(waterer),
+            "chickens_inside": int(round(inside)),
+            "egg_count": eggs,
+            "h2s_ppm": round(h2s, 2),
+            "h2s_level": _classify_h2s(h2s),
+            "mold_risk_score": round(mold, 1),
+            "mold_risk_status": _classify_mold(mold),
+            "door_open": door_open,
+            "ventilation_on": ventilation_on,
+        }
+
+
 def generate_scenario_data(scenario: str = "normal"):
     """
-    Generate sensor data for different scenarios.
-    
-    Args:
-        scenario: "normal", "hot_day", "cold_night", "critical", "resource_low"
-    
-    Returns:
-        Dictionary with sensor data
+    Legacy helper — returns a single snapshot for the given scenario label.
+    Still used by generate_simple_test_data().
     """
-    
-    scenarios = {
-        "normal": {
-            "temperature_c": random.uniform(20, 34),
-            "temperature_status": "normal",
-            "humidity_pct": random.uniform(50, 90),
-            "humidity_status": "normal",
-            "heat_stress_index": "normal",
-            "feeder_status": "full",
-            "waterer_status": "full"
-        },
-        
-        "hot_day": {
-            "temperature_c": random.uniform(28, 32),
-            "temperature_status": "warning",
-            "humidity_pct": random.uniform(65, 80),
-            "humidity_status": "warning",
-            "heat_stress_index": "warning",
-            "feeder_status": random.choice(["full", "full", "low"]),
-            "waterer_status": random.choice(["full", "low"])
-        },
-        
-        "critical": {
-            "temperature_c": random.uniform(35, 38),
-            "temperature_status": "critical",
-            "humidity_pct": random.uniform(80, 90),
-            "humidity_status": "critical",
-            "heat_stress_index": "critical",
-            "feeder_status": random.choice(["low", "empty"]),
-            "waterer_status": random.choice(["low", "empty"])
-        },
-        
-        "cold_night": {
-            "temperature_c": random.uniform(8, 14),
-            "temperature_status": "warning",
-            "humidity_pct": random.uniform(60, 75),
-            "humidity_status": "normal",
-            "heat_stress_index": "normal",
-            "feeder_status": "full",
-            "waterer_status": "full"
-        },
-        
-        "resource_low": {
-            "temperature_c": random.uniform(20, 24),
-            "temperature_status": "normal",
-            "humidity_pct": random.uniform(50, 65),
-            "humidity_status": "normal",
-            "heat_stress_index": "normal",
-            "feeder_status": "low",
-            "waterer_status": "low"
-        }
+    hour_map = {
+        "normal": 9, "hot_day": 12, "cold_night": 3,
+        "critical": 14, "resource_low": 10,
     }
-    
-    return scenarios.get(scenario, scenarios["normal"])
+    hour = hour_map.get(scenario, 10)
+    ts = [datetime.now()]
+    reading = next(_make_timeline_state(ts))
+
+    # Override numeric values to hit the desired scenario range
+    if scenario == "hot_day":
+        reading["temperature_c"] = random.uniform(28, 32)
+    elif scenario == "critical":
+        reading["temperature_c"] = random.uniform(35, 38)
+        reading["h2s_ppm"] = random.uniform(10, 22)
+        reading["mold_risk_score"] = random.uniform(60, 90)
+        reading["feeder_pct"] = random.uniform(5, 20)
+        reading["waterer_pct"] = random.uniform(5, 20)
+    elif scenario == "cold_night":
+        reading["temperature_c"] = random.uniform(8, 14)
+    elif scenario == "resource_low":
+        reading["feeder_pct"] = random.uniform(5, 20)
+        reading["waterer_pct"] = random.uniform(5, 20)
+
+    # Re-derive status fields after override
+    t = reading["temperature_c"]
+    h = reading["humidity_pct"]
+    reading["temperature_status"] = _classify_temp(t)
+    reading["humidity_status"] = _classify_humidity(h)
+    reading["heat_stress_index"] = _classify_heat_stress(t, h)
+    reading["feeder_status"] = _feeder_status(reading["feeder_pct"])
+    reading["waterer_status"] = _waterer_status(reading["waterer_pct"])
+    reading["h2s_level"] = _classify_h2s(reading["h2s_ppm"])
+    reading["mold_risk_status"] = _classify_mold(reading["mold_risk_score"])
+    return reading
 
 
-def _scenario_for_hour(hour):
-    """Pick a scenario based on time of day."""
-    if 6 <= hour < 10:
-        scenario = "normal"
-    elif 10 <= hour < 14:
-        scenario = "hot_day"
-    elif 14 <= hour < 16:
-        scenario = random.choice(["hot_day", "critical"])
-    elif 16 <= hour < 20:
-        scenario = "hot_day"
-    elif 20 <= hour < 22:
-        scenario = "normal"
-    else:
-        scenario = "cold_night"
-    if random.random() < 0.1:
-        scenario = "resource_low"
-    return scenario
+def _build_timestamps(now, days_back, step_minutes_bulk, last_2h_step=5):
+    """Build a sorted list of timestamps for bulk history + dense recent window."""
+    timestamps = []
+    bulk_start = now - timedelta(days=days_back)
+    bulk_end   = now - timedelta(hours=2)
+    t = bulk_start
+    while t < bulk_end:
+        timestamps.append(t)
+        t += timedelta(minutes=step_minutes_bulk)
+    # Last 2h at 5-min resolution
+    for i in range(int(120 / last_2h_step) + 1):
+        ts = now - timedelta(hours=2) + timedelta(minutes=i * last_2h_step)
+        if ts <= now:
+            timestamps.append(ts)
+    return timestamps
 
 
 def generate_24h_timeline():
     """
     Generate a realistic 24-hour timeline of sensor readings.
-    15-minute intervals for 24h + 5-minute intervals for the last 2h
-    so the 1h chart always has plenty of points.
+    Values drift continuously — no hard scenario snaps.
     """
-
     print("Generating 24-hour sensor data timeline...")
-    print()
-
-    readings_added = 0
     now = datetime.now()
-
-    # 24h ago → 2h ago at 15-min resolution
-    base_time = now - timedelta(days=1)
-    steps_15m = int((22 * 60) / 15)   # 22 hours worth
-    total = steps_15m + 24             # + 24 readings at 5-min for last 2h
-    for i in range(steps_15m):
-        timestamp = base_time + timedelta(minutes=i * 15)
-        sensor_data = generate_scenario_data(_scenario_for_hour(timestamp.hour))
-        sensor_data['timestamp'] = timestamp
-        insert_sensor_reading(sensor_data)
-        readings_added += 1
-        if readings_added % 20 == 0:
-            print(f"  Progress: {readings_added}/{total}", end='\r')
-
-    # Last 2h at 5-min resolution (gives ~24 points in the 1h chart)
-    for i in range(24):
-        timestamp = now - timedelta(hours=2) + timedelta(minutes=i * 5)
-        sensor_data = generate_scenario_data(_scenario_for_hour(timestamp.hour))
-        sensor_data['timestamp'] = timestamp
-        insert_sensor_reading(sensor_data)
-        readings_added += 1
-
-    print(f"\n✅ Added {readings_added} sensor readings")
+    timestamps = _build_timestamps(now, days_back=1, step_minutes_bulk=15)
+    total = len(timestamps)
+    for i, reading in enumerate(_make_timeline_state(timestamps), 1):
+        insert_sensor_reading(reading)
+        if i % 20 == 0:
+            print(f"  Progress: {i}/{total}", end='\r')
+    print(f"\n[OK] Added {total} sensor readings")
 
 
 def generate_7d_timeline():
     """
     Generate a 7-day timeline so the 7d chart has real data.
-    15-minute intervals for days 7–2 + denser data for the last 2 days.
+    Values drift continuously — no hard scenario snaps.
     """
-
     print("Generating 7-day sensor data timeline...")
-    print()
-
-    readings_added = 0
     now = datetime.now()
+    # Days 7→2 at 30-min, last 2 days at 15-min, last 2h at 5-min
+    timestamps = []
+    # Days 7→2 at 30-min
+    bulk_start = now - timedelta(days=7)
+    bulk_end   = now - timedelta(days=2)
+    t = bulk_start
+    while t < bulk_end:
+        timestamps.append(t)
+        t += timedelta(minutes=30)
+    # Last 2 days at 15-min
+    dense_end = now - timedelta(hours=2)
+    t = bulk_end
+    while t < dense_end:
+        timestamps.append(t)
+        t += timedelta(minutes=15)
+    # Last 2h at 5-min
+    for i in range(25):
+        ts = now - timedelta(hours=2) + timedelta(minutes=i * 5)
+        if ts <= now:
+            timestamps.append(ts)
 
-    # Days 7 → 2: one reading every 30 min
-    base_time = now - timedelta(days=7)
-    steps_30m = int((5 * 24 * 60) / 30)   # 5 days
-    for i in range(steps_30m):
-        timestamp = base_time + timedelta(minutes=i * 30)
-        sensor_data = generate_scenario_data(_scenario_for_hour(timestamp.hour))
-        sensor_data['timestamp'] = timestamp
-        insert_sensor_reading(sensor_data)
-        readings_added += 1
-        if readings_added % 50 == 0:
-            print(f"  Progress (bulk): {readings_added}", end='\r')
-
-    print()
-
-    # Last 2 days at 15-min resolution
-    base_time = now - timedelta(days=2)
-    steps_15m = int((2 * 24 * 60) / 15)
-    for i in range(steps_15m):
-        timestamp = base_time + timedelta(minutes=i * 15)
-        sensor_data = generate_scenario_data(_scenario_for_hour(timestamp.hour))
-        sensor_data['timestamp'] = timestamp
-        insert_sensor_reading(sensor_data)
-        readings_added += 1
-
-    # Last 2h at 5-min resolution
-    for i in range(24):
-        timestamp = now - timedelta(hours=2) + timedelta(minutes=i * 5)
-        sensor_data = generate_scenario_data(_scenario_for_hour(timestamp.hour))
-        sensor_data['timestamp'] = timestamp
-        insert_sensor_reading(sensor_data)
-        readings_added += 1
-
-    print(f"\n✅ Added {readings_added} sensor readings")
+    total = len(timestamps)
+    for i, reading in enumerate(_make_timeline_state(timestamps), 1):
+        insert_sensor_reading(reading)
+        if i % 50 == 0:
+            print(f"  Progress: {i}/{total}", end='\r')
+    print(f"\n[OK] Added {total} sensor readings")
 
 
 def generate_simple_test_data():
@@ -188,17 +264,17 @@ def generate_simple_test_data():
         ("normal", datetime.now() - timedelta(hours=2)),
         ("normal", datetime.now() - timedelta(hours=1, minutes=30)),
         ("hot_day", datetime.now() - timedelta(hours=1)),
-        ("warning", datetime.now() - timedelta(minutes=30)),
+        ("hot_day", datetime.now() - timedelta(minutes=30)),
         ("critical", datetime.now() - timedelta(minutes=5))
     ]
-    
+
     for scenario, timestamp in test_scenarios:
         sensor_data = generate_scenario_data(scenario)
         sensor_data['timestamp'] = timestamp
         insert_sensor_reading(sensor_data)
-        print(f"  ✓ {scenario.ljust(12)} @ {timestamp.strftime('%H:%M')}")
-    
-    print("✅ Test data ready")
+        print(f"  [OK] {scenario.ljust(12)} @ {timestamp.strftime('%H:%M')}")
+
+    print("[OK] Test data ready")
 
 
 def show_latest_reading():
@@ -221,8 +297,14 @@ def show_latest_reading():
     print(f"Temperature: {latest['temperature_c']:.1f}°C [{latest['temperature_status']}]")
     print(f"Humidity: {latest['humidity_pct']:.1f}% [{latest['humidity_status']}]")
     print(f"Heat Stress: {latest['heat_stress_index']}")
-    print(f"Feeder: {latest['feeder_status']}")
-    print(f"Waterer: {latest['waterer_status']}")
+    print(f"Feeder: {latest['feeder_status']} ({latest.get('feeder_pct', 'N/A')}%)")
+    print(f"Waterer: {latest['waterer_status']} ({latest.get('waterer_pct', 'N/A')}%)")
+    print(f"Chickens inside: {latest.get('chickens_inside', 'N/A')}")
+    print(f"Egg count: {latest.get('egg_count', 'N/A')}")
+    print(f"H2S: {latest.get('h2s_ppm', 'N/A')} ppm [{latest.get('h2s_level', 'N/A')}]")
+    print(f"Mold risk: {latest.get('mold_risk_score', 'N/A')} [{latest.get('mold_risk_status', 'N/A')}]")
+    print(f"Door open: {latest.get('door_open', 'N/A')}")
+    print(f"Ventilation on: {latest.get('ventilation_on', 'N/A')}")
 
 
 if __name__ == "__main__":

@@ -50,15 +50,19 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas import evaluate, EvaluationDataset, SingleTurnSample
 from ragas.metrics import ContextPrecision
+from ragas.run_config import RunConfig
 
 from rag_functions import (
     load_documents, split_documents, build_vector_store,
-    build_bm25_retriever, answer_query, hybrid_search, semantic_search,
+    build_bm25_retriever, answer_query,
 )
 from evaluate_rag import evaluate_answer_quality
 from evaluation_data import TEST_CASES
@@ -66,20 +70,28 @@ from evaluation_data import TEST_CASES
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-JUDGE_MODEL = "qwen2.5:1.5b-instruct"  # swap to qwen2.5:7b if scores are NaN
+# RAGAS_JUDGE_MODEL is a separate model from the generator (OLLAMA_MODEL).
+# Small models (< 3b) cannot reliably produce the structured JSON verdicts RAGAS
+# requires, so scores come out NaN.  Use at least qwen2.5:7b or llama3.2:3b here.
+# Pull with: ollama pull qwen2.5:7b
+JUDGE_MODEL = os.getenv("RAGAS_JUDGE_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
 KB_PATH = os.path.join(_ROOT, "test_docs")
 CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
 RESULTS_DIR = os.path.join(_HERE, "results")
 RESULTS_FILE = os.path.join(RESULTS_DIR, "retrieval_results.json")
 
 
-def _safe_score(scores_dict: dict, key: str) -> float:
-    val = scores_dict.get(key)
-    if val is None:
-        return float("nan")
+def _avg_from_eval(eval_result, metric_name: str) -> float:
+    """Extract average score for one metric from a ragas 0.4.x Results object.
+
+    In ragas 0.4.x Results is a Pydantic model — dict() gives model fields,
+    NOT metric averages. eval_result["metric_name"] returns list[float].
+    """
     try:
-        return float(val)
-    except (TypeError, ValueError):
+        vals = eval_result[metric_name]
+        valid = [v for v in vals if v is not None and v == v]
+        return sum(valid) / len(valid) if valid else float("nan")
+    except Exception:
         return float("nan")
 
 
@@ -97,14 +109,18 @@ def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # -------------------------------------------------------------------------
-    # Judge setup — local Ollama, NOT OpenAI
+    # Judge setup — Claude Haiku (requires ANTHROPIC_API_KEY in .env)
     # -------------------------------------------------------------------------
-    print(f"Setting up local judge: {JUDGE_MODEL}")
+    from langchain_anthropic import ChatAnthropic
+    _claude_model = os.getenv("CLAUDE_JUDGE_MODEL", "claude-haiku-4-5-20251001")
+    print(f"Judge: {_claude_model}")
     judge_llm = LangchainLLMWrapper(
-        ChatOllama(model=JUDGE_MODEL, temperature=0)
+        ChatAnthropic(model=_claude_model, temperature=0)
     )
+    # Embeddings always come from local Ollama (ContextPrecision doesn't need embeddings,
+    # but passing judge_embeddings to evaluate() is required by the API)
     judge_embeddings = LangchainEmbeddingsWrapper(
-        OllamaEmbeddings(model="nomic-embed-text")
+        OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
     )
 
     # -------------------------------------------------------------------------
@@ -134,25 +150,22 @@ def main():
         # --- Hybrid ---
         t0 = time.time()
         hybrid_result = answer_query(
-            question, vectordb, bm25, use_sensors=False, use_hybrid=True
+            question, vectordb, bm25, use_sensors=False, use_hybrid=True,
         )
         hybrid_time = time.time() - t0
-        # Retrieve again to get chunk texts for RAGAS
-        hybrid_docs = hybrid_search(vectordb, bm25, question, k=3)
-        hybrid_contexts = [doc.page_content for doc in hybrid_docs]
+        hybrid_contexts = [doc.page_content for doc in hybrid_result["documents"]]
 
         # --- Semantic only ---
         t0 = time.time()
         semantic_result = answer_query(
-            question, vectordb, bm25, use_sensors=False, use_hybrid=False
+            question, vectordb, bm25, use_sensors=False, use_hybrid=False,
         )
         semantic_time = time.time() - t0
-        semantic_docs = semantic_search(vectordb, question, k=3)
-        semantic_contexts = [doc.page_content for doc in semantic_docs]
+        semantic_contexts = [doc.page_content for doc in semantic_result["documents"]]
 
         # --- Heuristic scores ---
-        hybrid_heuristic = evaluate_answer_quality(hybrid_result["answer"], expected_topics)
-        semantic_heuristic = evaluate_answer_quality(semantic_result["answer"], expected_topics)
+        hybrid_heuristic = evaluate_answer_quality(hybrid_result["answer"], expected_topics, tc["category"])
+        semantic_heuristic = evaluate_answer_quality(semantic_result["answer"], expected_topics, tc["category"])
 
         hybrid_samples.append(
             SingleTurnSample(
@@ -191,26 +204,34 @@ def main():
     # -------------------------------------------------------------------------
     # Run RAGAS ContextPrecision for both conditions
     # -------------------------------------------------------------------------
+    # run_config: max_workers=1 serialises calls so local Ollama isn't overwhelmed;
+    # timeout=600 gives each LLM call up to 10 minutes (qwen3:4b is slower than 1.5b).
+    _run_cfg = RunConfig(timeout=600, max_workers=1)
+
     print("\nRunning RAGAS ContextPrecision on Hybrid condition...")
     hybrid_dataset = EvaluationDataset(samples=hybrid_samples)
     hybrid_ragas = evaluate(
         hybrid_dataset,
-        metrics=[ContextPrecision()],
+        metrics=[ContextPrecision(llm=judge_llm)],
         llm=judge_llm,
         embeddings=judge_embeddings,
+        run_config=_run_cfg,
+        raise_exceptions=False,
     )
 
     print("Running RAGAS ContextPrecision on Semantic condition...")
     semantic_dataset = EvaluationDataset(samples=semantic_samples)
     semantic_ragas = evaluate(
         semantic_dataset,
-        metrics=[ContextPrecision()],
+        metrics=[ContextPrecision(llm=judge_llm)],
         llm=judge_llm,
         embeddings=judge_embeddings,
+        run_config=_run_cfg,
+        raise_exceptions=False,
     )
 
-    hybrid_cp = _safe_score(dict(hybrid_ragas), "context_precision")
-    semantic_cp = _safe_score(dict(semantic_ragas), "context_precision")
+    hybrid_cp = _avg_from_eval(hybrid_ragas, "context_precision")
+    semantic_cp = _avg_from_eval(semantic_ragas, "context_precision")
 
     # -------------------------------------------------------------------------
     # Compute averages

@@ -46,15 +46,19 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas import evaluate, EvaluationDataset, SingleTurnSample
 from ragas.metrics import Faithfulness, AnswerRelevancy, ContextPrecision, ContextRecall
+from ragas.run_config import RunConfig
 
 from rag_functions import (
     load_documents, split_documents, build_vector_store,
-    build_bm25_retriever, answer_query, hybrid_search,
+    build_bm25_retriever, answer_query,
 )
 from evaluate_rag import get_norag_answer
 from evaluation_data import TEST_CASES
@@ -62,22 +66,33 @@ from evaluation_data import TEST_CASES
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-JUDGE_MODEL = "qwen2.5:1.5b-instruct"  # swap to qwen2.5:7b if scores are NaN
+# RAGAS_JUDGE_MODEL is a separate model from the generator (OLLAMA_MODEL).
+# Small models (< 3b) cannot reliably produce the structured JSON verdicts RAGAS
+# requires, so scores come out NaN.  Use at least qwen2.5:7b or llama3.2:3b here.
+# Pull with: ollama pull qwen2.5:7b
+JUDGE_MODEL = os.getenv("RAGAS_JUDGE_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:7b"))
 KB_PATH = os.path.join(_ROOT, "test_docs")
 CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
 RESULTS_DIR = os.path.join(_HERE, "results")
 RESULTS_FILE = os.path.join(RESULTS_DIR, "ragas_results.json")
 
 
-def _safe_score(scores_dict: dict, key: str) -> float:
-    """Return score or NaN-sentinel -1 if missing/None."""
-    val = scores_dict.get(key)
-    if val is None:
-        return float("nan")
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return float("nan")
+def _avg_from_eval(eval_result, metric_names: list) -> dict:
+    """Extract per-metric averages from a ragas 0.4.x Results object.
+
+    In ragas 0.4.x Results is a Pydantic model — dict() gives model fields
+    (scores, dataset), NOT metric averages. Use subscript instead:
+    eval_result["metric_name"] returns a list[float] of per-sample scores.
+    """
+    out = {}
+    for m in metric_names:
+        try:
+            vals = eval_result[m]  # list[float | None]
+            valid = [v for v in vals if v is not None and v == v]
+            out[m] = sum(valid) / len(valid) if valid else float("nan")
+        except Exception:
+            out[m] = float("nan")
+    return out
 
 
 def _fmt(val) -> str:
@@ -90,14 +105,17 @@ def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # -------------------------------------------------------------------------
-    # Judge setup — local Ollama, NOT OpenAI
+    # Judge setup — Claude Haiku (requires ANTHROPIC_API_KEY in .env)
     # -------------------------------------------------------------------------
-    print(f"Setting up local judge: {JUDGE_MODEL}")
+    from langchain_anthropic import ChatAnthropic
+    _claude_model = os.getenv("CLAUDE_JUDGE_MODEL", "claude-haiku-4-5-20251001")
+    print(f"Judge: {_claude_model}")
     judge_llm = LangchainLLMWrapper(
-        ChatOllama(model=JUDGE_MODEL, temperature=0)
+        ChatAnthropic(model=_claude_model, temperature=0)
     )
+    # Embeddings always come from local Ollama (used by AnswerRelevancy)
     judge_embeddings = LangchainEmbeddingsWrapper(
-        OllamaEmbeddings(model="nomic-embed-text")
+        OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe"))
     )
 
     # -------------------------------------------------------------------------
@@ -123,13 +141,12 @@ def main():
 
         print(f"[{i}/{len(TEST_CASES)}] {question}")
 
-        # RAG: retrieve + generate
+        # RAG: retrieve + generate (contexts taken from same call to avoid MMR stochasticity)
         t0 = time.time()
-        retrieved = hybrid_search(vectordb, bm25, question, k=3)
-        contexts = [doc.page_content for doc in retrieved]
         rag_result = answer_query(
-            question, vectordb, bm25, use_sensors=False, use_hybrid=True
+            question, vectordb, bm25, use_sensors=False, use_hybrid=True,
         )
+        contexts = [doc.page_content for doc in rag_result["documents"]]
         rag_time = time.time() - t0
 
         # NO-RAG: generate only
@@ -169,31 +186,38 @@ def main():
     # -------------------------------------------------------------------------
     # Run RAGAS evaluation
     # -------------------------------------------------------------------------
+    # ragas 0.4.x requires llm/embeddings passed to metric constructors directly
     metrics = [
-        Faithfulness(),
-        AnswerRelevancy(),
-        ContextPrecision(),
-        ContextRecall(),
+        Faithfulness(llm=judge_llm),
+        AnswerRelevancy(llm=judge_llm, embeddings=judge_embeddings),
+        ContextPrecision(llm=judge_llm),
+        ContextRecall(llm=judge_llm),
     ]
     metric_names = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+
+    # run_config: max_workers=1 serialises calls so local Ollama isn't overwhelmed;
+    # timeout=600 gives each LLM call up to 10 minutes (qwen3:4b is slower than 1.5b).
+    _run_cfg = RunConfig(timeout=600, max_workers=1)
 
     print("\nRunning RAGAS on RAG condition (this may take a while)...")
     rag_dataset = EvaluationDataset(samples=rag_samples)
     rag_eval = evaluate(
-        rag_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings
+        rag_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings,
+        run_config=_run_cfg, raise_exceptions=False,
     )
 
     print("Running RAGAS on NO-RAG condition...")
     norag_dataset = EvaluationDataset(samples=norag_samples)
     norag_eval = evaluate(
-        norag_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings
+        norag_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings,
+        run_config=_run_cfg, raise_exceptions=False,
     )
 
     # -------------------------------------------------------------------------
-    # Extract scores (ragas 0.2.x returns a Results object, subscriptable by metric name)
+    # Extract scores
     # -------------------------------------------------------------------------
-    rag_scores = {m: _safe_score(dict(rag_eval), m) for m in metric_names}
-    norag_scores = {m: _safe_score(dict(norag_eval), m) for m in metric_names}
+    rag_scores = _avg_from_eval(rag_eval, metric_names)
+    norag_scores = _avg_from_eval(norag_eval, metric_names)
 
     # -------------------------------------------------------------------------
     # Print side-by-side comparison table

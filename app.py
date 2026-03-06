@@ -40,9 +40,10 @@ class AppState:
 
 state = AppState()
 
-KNOWLEDGE_BASE_PATH = os.getenv("KNOWLEDGE_BASE_PATH", "test_docs")
-SCHEDULER_INTERVAL  = int(os.getenv("SCHEDULER_INTERVAL", "60"))   # seconds
-SIMULATION_MODE     = os.getenv("SIMULATION_MODE", "false").lower() == "true"
+KNOWLEDGE_BASE_PATH  = os.getenv("KNOWLEDGE_BASE_PATH", "test_docs")
+SCHEDULER_INTERVAL   = int(os.getenv("SCHEDULER_INTERVAL", "60"))   # seconds
+SIMULATION_MODE      = os.getenv("SIMULATION_MODE", "false").lower() == "true"
+CHAT_HISTORY_TURNS   = int(os.getenv("CHAT_HISTORY_TURNS", "2"))
 
 
 @asynccontextmanager
@@ -110,6 +111,7 @@ class QueryRequest(BaseModel):
     query: str
     use_sensors: bool = True
     use_hybrid: bool = True
+    history: list[dict] = []
 
 
 class QueryResponse(BaseModel):
@@ -165,29 +167,33 @@ def ask_question(request: QueryRequest):
             detail="RAG pipeline not initialized. Add documents to the knowledge base.",
         )
 
+    # Trim history to the configured number of turns (each turn = 1 user + 1 assistant msg)
+    trimmed_history = request.history[-(CHAT_HISTORY_TURNS * 2):] if CHAT_HISTORY_TURNS > 0 else []
+
     result = answer_query(
         query=request.query,
         vectordb=state.vectordb,
         bm25_retriever=state.bm25_retriever,
         use_sensors=request.use_sensors,
         use_hybrid=request.use_hybrid,
+        history=trimmed_history,
     )
 
     # Log to event_log for later evaluation
     try:
-        sensor_data = get_latest_sensor_reading() if request.use_sensors else None
         insert_event(
             event_type="llm_response",
             severity="critical" if result["has_critical"] else "info",
             user_query=request.query,
             llm_response=result["answer"],
-            sensor_snapshot=sensor_data,
+            sensor_snapshot=result["sensor_data"],
             sensor_context_filtered=result["sensor_context"],
+            sources=result["sources"],
         )
     except Exception as e:
         logger.warning(f"Failed to log event: {e}")
 
-    return QueryResponse(**result)
+    return QueryResponse(**{k: v for k, v in result.items() if k not in ("documents", "sensor_data")})
 
 
 @app.post("/setup-db")

@@ -15,18 +15,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Database connection configuration — reads from .env, falls back to defaults
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "database": os.getenv("DB_NAME", "chickens"),
-    "user": os.getenv("DB_USER", "postgres"),
-    "password": os.getenv("DB_PASSWORD", ""),
-    "port": int(os.getenv("DB_PORT", "5432"))
-}
+# ── Connection config ──────────────────────────────────────────────────────────
+# Priority: DATABASE_URL (Supabase / any hosted Postgres)
+#           → individual DB_* vars (local Postgres)
+#
+# To switch to Supabase: set DATABASE_URL in .env and leave DB_* as fallbacks.
+# To switch back to local: clear DATABASE_URL (or comment it out).
+_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-# Connection pool — reuses connections instead of opening/closing each call.
-# minconn=1 keeps one connection warm; maxconn=5 is plenty for API + scheduler.
-_pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
+if _DATABASE_URL:
+    # Hosted Postgres / Supabase — single connection string
+    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, dsn=_DATABASE_URL)
+    print(f"[DB] Connected via DATABASE_URL (Supabase / hosted Postgres)")
+else:
+    # Local Postgres — individual vars
+    DB_CONFIG = {
+        "host": os.getenv("DB_HOST", "localhost"),
+        "database": os.getenv("DB_NAME", "chickens"),
+        "user": os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD", ""),
+        "port": int(os.getenv("DB_PORT", "5432")),
+    }
+    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
+    print(f"[DB] Connected to local Postgres ({DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']})")
+
 atexit.register(lambda: _pool.closeall() if _pool and not _pool.closed else None)
 
 
@@ -57,15 +69,16 @@ def get_latest_sensor_reading() -> Optional[Dict]:
 
         query = """
             SELECT
-                id,
-                timestamp,
-                temperature_c,
-                temperature_status,
-                humidity_pct,
-                humidity_status,
+                id, timestamp,
+                temperature_c, temperature_status,
+                humidity_pct, humidity_status,
                 heat_stress_index,
-                feeder_status,
-                waterer_status
+                feeder_status, waterer_status,
+                feeder_pct, waterer_pct,
+                chickens_inside, egg_count,
+                h2s_ppm, h2s_level,
+                mold_risk_score, mold_risk_status,
+                door_open, ventilation_on
             FROM sensor_readings
             ORDER BY timestamp DESC
             LIMIT 1
@@ -96,15 +109,16 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
 
         query = """
             SELECT
-                id,
-                timestamp,
-                temperature_c,
-                temperature_status,
-                humidity_pct,
-                humidity_status,
+                id, timestamp,
+                temperature_c, temperature_status,
+                humidity_pct, humidity_status,
                 heat_stress_index,
-                feeder_status,
-                waterer_status
+                feeder_status, waterer_status,
+                feeder_pct, waterer_pct,
+                chickens_inside, egg_count,
+                h2s_ppm, h2s_level,
+                mold_risk_score, mold_risk_status,
+                door_open, ventilation_on
             FROM sensor_readings
             ORDER BY id DESC
             LIMIT %s
@@ -137,8 +151,15 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
         since = datetime.now() - timedelta(hours=hours)
         cursor.execute(
             """
-            SELECT timestamp, temperature_c, temperature_status,
-                   humidity_pct, humidity_status, heat_stress_index
+            SELECT timestamp,
+                   temperature_c, temperature_status,
+                   humidity_pct, humidity_status,
+                   heat_stress_index,
+                   feeder_pct, waterer_pct,
+                   chickens_inside, egg_count,
+                   h2s_ppm, h2s_level,
+                   mold_risk_score, mold_risk_status,
+                   door_open, ventilation_on
             FROM sensor_readings
             WHERE timestamp >= %s
             ORDER BY timestamp ASC
@@ -172,15 +193,18 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
         query = """
             INSERT INTO sensor_readings (
                 timestamp,
-                temperature_c,
-                temperature_status,
-                humidity_pct,
-                humidity_status,
+                temperature_c, temperature_status,
+                humidity_pct, humidity_status,
                 heat_stress_index,
-                feeder_status,
-                waterer_status
+                feeder_status, waterer_status,
+                feeder_pct, waterer_pct,
+                chickens_inside, egg_count,
+                h2s_ppm, h2s_level,
+                mold_risk_score, mold_risk_status,
+                door_open, ventilation_on
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
         """
@@ -193,7 +217,17 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('humidity_status', 'normal'),
             sensor_data.get('heat_stress_index', 'normal'),
             sensor_data.get('feeder_status', 'full'),
-            sensor_data.get('waterer_status', 'full')
+            sensor_data.get('waterer_status', 'full'),
+            sensor_data.get('feeder_pct'),
+            sensor_data.get('waterer_pct'),
+            sensor_data.get('chickens_inside'),
+            sensor_data.get('egg_count'),
+            sensor_data.get('h2s_ppm'),
+            sensor_data.get('h2s_level', 'normal'),
+            sensor_data.get('mold_risk_score'),
+            sensor_data.get('mold_risk_status', 'normal'),
+            sensor_data.get('door_open', False),
+            sensor_data.get('ventilation_on', False),
         )
 
         cursor.execute(query, values)
@@ -223,11 +257,16 @@ CREATE TABLE IF NOT EXISTS event_log (
     user_query TEXT,
     llm_response TEXT,
     sensor_snapshot JSONB,
-    sensor_context_filtered TEXT
+    sensor_context_filtered TEXT,
+    sources JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_timestamp ON event_log(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_event_type ON event_log(event_type);
+"""
+
+MIGRATE_EVENT_LOG_SQL = """
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS sources JSONB;
 """
 
 
@@ -238,6 +277,7 @@ def insert_event(
     llm_response: str = None,
     sensor_snapshot: dict = None,
     sensor_context_filtered: str = None,
+    sources: list = None,
 ) -> int:
     """
     Log an event to the event_log table.
@@ -255,8 +295,8 @@ def insert_event(
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO event_log
-               (event_type, severity, user_query, llm_response, sensor_snapshot, sensor_context_filtered)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+               (event_type, severity, user_query, llm_response, sensor_snapshot, sensor_context_filtered, sources)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 event_type,
                 severity,
@@ -264,6 +304,7 @@ def insert_event(
                 llm_response,
                 json.dumps(sensor_snapshot, default=str) if sensor_snapshot else None,
                 sensor_context_filtered,
+                json.dumps(list(dict.fromkeys(sources))) if sources else None,
             ),
         )
         event_id = cursor.fetchone()[0]
@@ -322,7 +363,17 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     humidity_status TEXT DEFAULT 'normal',
     heat_stress_index TEXT DEFAULT 'normal',
     feeder_status TEXT DEFAULT 'full',
-    waterer_status TEXT DEFAULT 'full'
+    waterer_status TEXT DEFAULT 'full',
+    feeder_pct FLOAT,
+    waterer_pct FLOAT,
+    chickens_inside INT,
+    egg_count INT,
+    h2s_ppm FLOAT,
+    h2s_level TEXT DEFAULT 'normal',
+    mold_risk_score FLOAT,
+    mold_risk_status TEXT DEFAULT 'normal',
+    door_open BOOLEAN DEFAULT FALSE,
+    ventilation_on BOOLEAN DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_timestamp ON sensor_readings(timestamp DESC);
@@ -339,6 +390,7 @@ def setup_database():
         cursor = conn.cursor()
         cursor.execute(CREATE_TABLE_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)
+        cursor.execute(MIGRATE_EVENT_LOG_SQL)
         conn.commit()
         cursor.close()
         print("Database tables created successfully (sensor_readings + event_log)")

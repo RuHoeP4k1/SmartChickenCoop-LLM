@@ -19,6 +19,7 @@ chromadb==1.5.1
 # Document processing
 pypdf==6.4.0
 python-docx==1.2.0
+pymupdf4llm
 
 # FastAPI (from your working config)
 fastapi==0.124.0
@@ -50,3 +51,6 @@ click==8.2.1
 # RAG Evaluation (evaluation/ folder)
 ragas==0.4.3
 deepeval==3.8.4
+
+# Claude API judge for RAGAS evaluation (optional — only needed if ANTHROPIC_API_KEY is set)
+langchain-anthropic

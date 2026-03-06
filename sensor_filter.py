@@ -1,28 +1,55 @@
 """
-Smart sensor context filtering
-Decides when to include sensor data in LLM prompt to reduce token usage
+sensor_filter.py — Smart sensor context filtering
+
+Decides when to include sensor data in the LLM prompt.
+Core principle: only inject sensors when the user is asking about
+their *current* coop situation — not for general knowledge questions.
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 # If the latest reading is older than this, treat it as stale and ignore it.
-# 30 minutes is generous — the Pi should write every ~2 minutes.
 STALE_THRESHOLD = timedelta(minutes=30)
 
 
+# =============================================================================
+# Keyword sets
+# =============================================================================
+
+# Signals that the user is asking about their coop RIGHT NOW
+_CURRENT_SITUATION_KEYWORDS = [
+    "my coop", "my chickens", "my flock", "my birds", "my hens",
+    "right now", "at the moment", "currently", "in there",
+    "is it too", "are they okay", "should i be worried",
+    "panting", "lethargic", "not moving", "breathing heavy", "wings spread",
+    "what are the readings", "check the coop", "how is the coop",
+    "how are my", "is my",
+]
+
+# Resource-related keywords — used in combination with low/empty status
+_RESOURCE_KEYWORDS = ["feeder", "waterer", "food", "water", "refill", "empty", "refilling"]
+
+# Broad chicken topic keywords — used only when critical conditions exist
+_CHICKEN_TOPIC_KEYWORDS = [
+    "chicken", "hen", "flock", "bird", "egg", "coop", "roost",
+    "sick", "ill", "health", "behavior", "feed", "water",
+]
+
+
+# =============================================================================
+# Staleness check
+# =============================================================================
+
 def is_reading_stale(sensor_data: Dict) -> bool:
     """
-    Check whether a sensor reading is too old to be trusted.
-
-    Returns True if the reading's timestamp is older than STALE_THRESHOLD,
-    or if there is no timestamp at all.
+    Return True if the reading's timestamp is older than STALE_THRESHOLD,
+    or if there is no timestamp.
     """
     ts = sensor_data.get("timestamp")
     if ts is None:
         return True
 
-    # psycopg2 returns datetime objects; handle both naive and aware
     if isinstance(ts, str):
         ts = datetime.fromisoformat(ts)
 
@@ -30,270 +57,224 @@ def is_reading_stale(sensor_data: Dict) -> bool:
     return (now - ts) > STALE_THRESHOLD
 
 
+# =============================================================================
+# Environment / current-coop query detection
+# =============================================================================
+
 def is_environment_query(user_query: str) -> bool:
     """
-    Check if the query is specifically about coop conditions or distress symptoms.
+    Return True if the query is specifically about the user's current coop
+    conditions or visible distress symptoms — i.e. sensor data is relevant.
 
-    This is separate from critical sensor checks — it only looks at the query text.
-    Used to decide whether emergency mode is appropriate.
+    This is narrower than before: "what temperature is too hot for chickens?"
+    is a general knowledge question and returns False.
+    "Is my coop too hot right now?" returns True.
     """
-    environment_keywords = [
-        # Direct coop condition questions
-        "temperature in", "temp in", "how hot is", "how cold is",
-        "coop temperature", "coop temp",
-        "humidity in", "humidity level",
-
-        # Active distress symptoms (likely environment-caused)
-        "panting", "heat stress", "heat stroke", "overheating",
-        "freezing", "hypothermia",
-        "lethargic", "not moving", "breathing heavy",
-        "wings spread",
-
-        # Direct sensor/coop references
-        "feeder", "waterer", "sensor", "coop conditions",
-        "what are the readings", "check the coop"
-    ]
-
     query_lower = user_query.lower()
-    return any(keyword in query_lower for keyword in environment_keywords)
+    return any(kw in query_lower for kw in _CURRENT_SITUATION_KEYWORDS)
 
+
+# =============================================================================
+# Main filtering decision
+# =============================================================================
 
 def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
     """
-    Decide if we need to include sensor data in the LLM prompt.
+    Decide whether to include sensor data in the LLM prompt.
 
-    Strategy:
-    1. If query is about environment/distress → include
-    2. If query is about resources AND resources are low → include
-    3. If critical alerts exist → include as brief note (NOT emergency mode)
-    4. General questions → skip sensors
-
-    Args:
-        user_query: User's question
-        sensor_data: Current sensor readings from database
-
-    Returns:
-        True if sensor context should be included
+    Rules (in priority order):
+    1. Stale / missing data → never include
+    2. User is asking about their current coop situation → include
+    3. Resource question (feeder/water) AND resources are low/empty → include
+    4. Critical conditions AND question is about chickens/coop → include
+    5. General knowledge question → skip sensors
     """
-
     if not sensor_data:
         return False
 
-    # Stale readings are unreliable — don't feed old data to the LLM
     if is_reading_stale(sensor_data):
         return False
 
-    # Check 1: Query specifically about coop conditions or distress?
-    if is_environment_query(user_query):
+    query_lower = user_query.lower()
+
+    # Rule 2: User is asking about their coop right now
+    if any(kw in query_lower for kw in _CURRENT_SITUATION_KEYWORDS):
         return True
 
-    # Check 2: Resource warnings + relevant query
-    resource_warning = (
+    # Rule 3: Resource question + resource is actually low or empty
+    resource_low = (
         sensor_data.get("feeder_status") in ["low", "empty"] or
         sensor_data.get("waterer_status") in ["low", "empty"]
     )
-
-    resource_keywords = ["feeder", "waterer", "refill", "empty"]
-    query_lower = user_query.lower()
-
-    if resource_warning and any(kw in query_lower for kw in resource_keywords):
+    if resource_low and any(kw in query_lower for kw in _RESOURCE_KEYWORDS):
         return True
 
-    # Check 3: Critical alerts — still include sensors, but answer_query
-    # will NOT use emergency mode since the query isn't about environment
-    critical_params = ["temperature_status", "humidity_status", "heat_stress_index"]
-    has_critical = any(
-        sensor_data.get(param) == "critical"
-        for param in critical_params
-    )
+    # Rule 4: Critical conditions, but ONLY if the question is about chickens/coop
+    # (avoids injecting sensors for "what breed should I get?" when coop is critical)
+    critical_params = [
+        "temperature_status", "humidity_status", "heat_stress_index",
+        "h2s_level", "mold_risk_status",
+    ]
+    has_critical = any(sensor_data.get(p) == "critical" for p in critical_params)
 
-    if has_critical:
+    if has_critical and any(kw in query_lower for kw in _CHICKEN_TOPIC_KEYWORDS):
         return True
 
-    # Default: Skip sensors for general questions
     return False
 
 
+# =============================================================================
+# Sensor context formatting
+# =============================================================================
+
 def get_sensor_context(sensor_data: Dict) -> str:
     """
-    Build sensor context string for the LLM prompt.
-    Reports non-normal readings; falls back to "All readings normal."
+    Build a compact sensor context string for the LLM prompt.
 
-    NOTE: The sensor team determines what is "normal", "warning", or "critical".
-    We just use their labels - we don't define thresholds.
-    
-    Args:
-        sensor_data: Current sensor readings from database
-    
+    Only reports readings that are non-normal / non-full. Does NOT dump
+    all sensor values — chickens_inside, egg_count, door, ventilation are
+    only included when notable (door open = notable; ventilation always on = not).
+
     Returns:
-        Formatted string with relevant sensor info
+        Formatted string with current readings, or "All coop readings normal."
     """
-    
     if not sensor_data:
         return ""
-    
+
     alerts = []
-    
-    # Temperature (sensor team labels this as normal/warning/critical)
+
+    # Temperature
     temp_status = sensor_data.get("temperature_status", "normal")
     if temp_status != "normal":
         temp_c = sensor_data.get("temperature_c")
-        alerts.append(
-            f"🌡️ Temperature: {temp_c:.2f}°C ({temp_status.capitalize()})"
-        )
+        if temp_c is not None:
+            alerts.append(f"Temperature: {temp_c:.1f}°C ({temp_status})")
 
-    # Humidity (sensor team labels this)
+    # Humidity
     humidity_status = sensor_data.get("humidity_status", "normal")
     if humidity_status != "normal":
         humidity_pct = sensor_data.get("humidity_pct")
-        alerts.append(
-            f"💧 Humidity: {humidity_pct:.2f}% ({humidity_status.capitalize()})"
-        )
-    
-    # Heat stress (composite indicator from sensor team)
+        if humidity_pct is not None:
+            alerts.append(f"Humidity: {humidity_pct:.0f}% ({humidity_status})")
+
+    # Heat stress (composite)
     heat_stress = sensor_data.get("heat_stress_index", "normal")
     if heat_stress != "normal":
-        # More informative, less alarming
-        stress_text = "Heat stress detected" if heat_stress == "critical" else "Heat stress possible"
-        alerts.append(f"🔥 {stress_text}")
-    
-    # Feeder
+        alerts.append(f"Heat stress: {heat_stress}")
+
+    # Feeder — include percentage when available
     feeder_status = sensor_data.get("feeder_status", "full")
     if feeder_status in ["low", "empty"]:
-        alerts.append(f"🍗 Feeder: {feeder_status.capitalize()}")
-    
+        pct = sensor_data.get("feeder_pct")
+        pct_str = f" ({pct:.0f}%)" if pct is not None else ""
+        alerts.append(f"Feeder: {feeder_status}{pct_str}")
+
     # Waterer
     waterer_status = sensor_data.get("waterer_status", "full")
     if waterer_status in ["low", "empty"]:
-        alerts.append(f"💧 Waterer: {waterer_status.capitalize()}")
-    
-    context = "Current coop conditions:\n"
-    if alerts:
-        context += "\n".join(alerts)
-    else:
-        context += "All readings normal."
-    return context
+        pct = sensor_data.get("waterer_pct")
+        pct_str = f" ({pct:.0f}%)" if pct is not None else ""
+        alerts.append(f"Waterer: {waterer_status}{pct_str}")
 
+    # H2S gas
+    h2s_level = sensor_data.get("h2s_level", "normal")
+    if h2s_level != "normal":
+        h2s_ppm = sensor_data.get("h2s_ppm")
+        ppm_str = f" ({h2s_ppm:.0f} ppm)" if h2s_ppm is not None else ""
+        alerts.append(f"H2S gas: {h2s_level}{ppm_str}")
+
+    # Mold risk
+    mold_risk = sensor_data.get("mold_risk_status", "normal")
+    if mold_risk != "normal":
+        alerts.append(f"Mold risk: {mold_risk}")
+
+    # Door — only notable when open
+    if sensor_data.get("door_open"):
+        alerts.append("Coop door: open")
+
+    if alerts:
+        return "Current coop readings:\n" + "\n".join(f"- {a}" for a in alerts)
+    return "All coop readings normal."
+
+
+# =============================================================================
+# Critical alert list (used by scheduler and answer_query)
+# =============================================================================
 
 def get_critical_alerts(sensor_data: Dict) -> list:
     """
-    Get list of critical alerts that require immediate attention.
-    Used for automation triggers and notifications.
-    
-    NOTE: "Critical" status comes from sensor team's assessment.
-    We format it in a calm, informative way.
-    
-    Args:
-        sensor_data: Current sensor readings
-    
-    Returns:
-        List of critical alert messages (calm tone)
+    Return a list of critical alert messages (calm tone).
+    Used by the scheduler for automation triggers and by answer_query
+    to decide whether to use the emergency prompt.
     """
-    
     if not sensor_data:
         return []
-    
+
     critical = []
-    
-    # Check each parameter (using sensor team's labels)
+
     if sensor_data.get("temperature_status") == "critical":
-        critical.append(
-            f"High temperature detected: {sensor_data.get('temperature_c', 0):.2f}°C"
-        )
-    
+        temp = sensor_data.get("temperature_c", 0)
+        critical.append(f"High temperature: {temp:.1f}°C")
+
     if sensor_data.get("humidity_status") == "critical":
-        critical.append(
-            f"High humidity detected: {sensor_data.get('humidity_pct', 0):.2f}%"
-        )
-    
+        hum = sensor_data.get("humidity_pct", 0)
+        critical.append(f"High humidity: {hum:.0f}%")
+
     if sensor_data.get("heat_stress_index") == "critical":
         critical.append("Heat stress conditions present")
-    
+
     if sensor_data.get("feeder_status") == "empty":
         critical.append("Feeder is empty")
-    
+
     if sensor_data.get("waterer_status") == "empty":
         critical.append("Waterer is empty")
-    
+
+    if sensor_data.get("h2s_level") == "critical":
+        ppm = sensor_data.get("h2s_ppm")
+        ppm_str = f": {ppm:.0f} ppm" if ppm is not None else ""
+        critical.append(f"Dangerous H2S gas detected{ppm_str}")
+
+    if sensor_data.get("mold_risk_status") == "critical":
+        critical.append("Critical mold risk conditions")
+
     return critical
 
 
-# Example usage and testing
+# =============================================================================
+# Manual test
+# =============================================================================
+
 if __name__ == "__main__":
-    
-    # Test Case 1: Normal conditions
-    print("="*60)
-    print("TEST 1: Normal conditions, general question")
-    print("="*60)
-    
-    normal_data = {
-        "temperature_c": 22.3,
-        "temperature_status": "normal",
-        "humidity_pct": 55,
-        "humidity_status": "normal",
-        "heat_stress_index": "normal",
-        "feeder_status": "full",
-        "waterer_status": "full"
+
+    normal = {
+        "temperature_c": 22.3, "temperature_status": "normal",
+        "humidity_pct": 55, "humidity_status": "normal",
+        "heat_stress_index": "normal", "feeder_status": "full",
+        "waterer_status": "full", "feeder_pct": 80, "waterer_pct": 75,
+        "h2s_level": "normal", "mold_risk_status": "normal",
+        "door_open": False,
     }
-    
-    query1 = "How often do chickens lay eggs?"
-    include1 = should_include_sensors(query1, normal_data)
-    
-    print(f"Query: {query1}")
-    print(f"Include sensors? {include1}")
-    if include1:
-        print(f"Context:\n{get_sensor_context(normal_data)}")
-    print()
-    
-    # Test Case 2: Critical temperature, environment question
-    print("="*60)
-    print("TEST 2: Critical temperature, environment question")
-    print("="*60)
-    
-    critical_data = {
-        "temperature_c": 35.2,
-        "temperature_status": "critical",
-        "humidity_pct": 85,
-        "humidity_status": "critical",
+    critical = {**normal,
+        "temperature_c": 35.2, "temperature_status": "critical",
+        "humidity_pct": 85, "humidity_status": "critical",
         "heat_stress_index": "critical",
-        "feeder_status": "low",
-        "waterer_status": "empty"
+        "feeder_status": "empty", "feeder_pct": 2,
+        "waterer_status": "empty", "waterer_pct": 3,
     }
-    
-    query2 = "My chickens are panting heavily"
-    include2 = should_include_sensors(query2, critical_data)
-    
-    print(f"Query: {query2}")
-    print(f"Include sensors? {include2}")
-    if include2:
-        print(f"Context:\n{get_sensor_context(critical_data)}")
-    print(f"\nCritical alerts: {get_critical_alerts(critical_data)}")
-    print()
-    
-    # Test Case 3: Normal conditions, but environment question
-    print("="*60)
-    print("TEST 3: Normal conditions, but environment question")
-    print("="*60)
-    
-    query3 = "What temperature is too hot for chickens?"
-    include3 = should_include_sensors(query3, normal_data)
-    
-    print(f"Query: {query3}")
-    print(f"Include sensors? {include3}")
-    if include3:
-        print(f"Context:\n{get_sensor_context(normal_data)}")
-    print()
-    
-    # Test Case 4: Critical conditions, but general question
-    print("="*60)
-    print("TEST 4: Critical conditions, general question")
-    print("="*60)
-    
-    query4 = "What breed should I get?"
-    include4 = should_include_sensors(query4, critical_data)
-    
-    print(f"Query: {query4}")
-    print(f"Include sensors? {include4}")
-    print("(Still includes because critical alerts always show)")
-    if include4:
-        print(f"Context:\n{get_sensor_context(critical_data)}")
+
+    tests = [
+        ("How often do chickens lay eggs?", normal, False),
+        ("What temperature is too hot for chickens?", normal, False),
+        ("Is my coop too hot right now?", normal, True),
+        ("My chickens are panting", normal, True),
+        ("What breed should I get?", critical, False),
+        ("Are my chickens okay?", critical, True),
+    ]
+
+    for query, data, expected in tests:
+        result = should_include_sensors(query, data)
+        status = "OK" if result == expected else "FAIL"
+        print(f"[{status}] '{query}' → include={result} (expected={expected})")
+        if result:
+            print(get_sensor_context(data))
+        print()

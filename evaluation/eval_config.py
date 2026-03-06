@@ -28,22 +28,32 @@ You do NOT need to write code here. Just fill in the text between the triple quo
 # ---------------------------------------------------------------------------
 
 ACTIONABILITY_CRITERIA = """
+Note: Match the standard to the question type. A factual question (“how often do chickens lay?”) is fully
+actionable when it gives a clear, usable answer. A problem question (“my chicken won't eat”) is only
+actionable when it tells the user something concrete to do. Do NOT penalise a short, direct answer for
+lacking numbered steps or sections — format is irrelevant, usefulness is what matters.
 
 Score 1 (Not actionable):
-- Mostly generic explanations (“could be stress”, “check their diet”) with no clear next steps.
-- No order of actions, no specifics (what to check, how to do it), and no “when to get help” guidance.
-- Leaves a beginner unsure what to do today.
+- Gives only vague generalities (“it depends”, “could be many things”) with nothing the user can act on.
+- Repeats the question back or provides filler text without any real information.
+- After reading the answer a beginner still has no idea what to do or think.
 
 Score 2 (Somewhat actionable):
-- Gives a few concrete actions (e.g., isolate the bird, refresh water, clean coop), but steps are incomplete or not prioritized.
-- Missing key practical details (how long to observe, what signs to watch for, what “clean” means).
-- Some guidance is usable, but the user still has to guess.
+- Contains at least one genuinely useful piece of information or step, but leaves important gaps.
+- For a problem question: mentions what to do but skips key details (e.g. “isolate the bird” with no
+  indication of what to watch for or for how long).
+- For a factual question: gives a partial or overly hedged answer that still requires the user to look
+  elsewhere to get a usable answer.
+- Usable in parts, but the user has to fill in the blanks themselves.
 
-Score 3 (Highly actionable):
-- Clear, beginner-friendly checklist in a sensible order (do this first, then this).
-- Includes simple, doable details (what to look for, basic hygiene steps, how to monitor, how long to wait).
-- States clear “red flags” and when to contact a vet/experienced keeper immediately.
-- Uses plain language and focuses on actions a hobby keeper can realistically do.
+Score 3 (Genuinely helpful):
+- Directly answers what the user asked in plain, beginner-friendly language.
+- For a problem question: tells the user at least one concrete thing to do and what outcome to watch for;
+  does not have to be a numbered list — a clear sentence or two is enough.
+- For a factual question: gives a specific, correct answer the user can immediately rely on.
+- The answer fits the scope of the question — a simple question gets a focused answer, a complex
+  situation gets appropriately more detail.
+- A hobby keeper reading this answer knows what to do or think next without needing to search further.
 """
 
 # 👆 Replace everything between the triple quotes, keeping the variable name.
@@ -66,22 +76,31 @@ Score 3 (Highly actionable):
 # ---------------------------------------------------------------------------
 
 CORRECTNESS_CRITERIA = """
-Note: We are NOT scoring scientific accuracy in depth. We score “safe, sensible, and appropriate advice” for hobby chicken keepers.
+Note: We score “safe, sensible, and appropriate” advice for hobby chicken keepers — not scientific depth.
+Vet referrals are only relevant when the question involves a genuine health or injury concern. Do NOT
+penalise an answer about egg-laying frequency or feed ratios for failing to mention a vet.
 
-Score 1 (Unsafe / inappropriate):
-- Encourages risky actions (e.g., give random human meds, antibiotics, essential oils, harsh chemicals, or dosing instructions).
-- Tells the user to ignore severe symptoms or delays urgent help.
-- Gives confident claims without safety warnings, or advice that could clearly harm the bird.
+Score 1 (Incorrect or harmful):
+- Contains clearly wrong facts that could mislead a beginner (e.g., wrong temperature ranges, wrong
+  lay rates, wrong feeding guidance).
+- Recommends something that could harm the birds: human medications, essential oils, harsh chemicals,
+  unsafe dosing, or ignoring symptoms that warrant immediate attention.
+- Actively contradicts established poultry welfare or husbandry practice in a way that could cause harm.
 
-Score 2 (Mostly safe but imperfect):
-- Advice is generally reasonable and welfare-friendly, but has minor questionable points or missing safety caveats.
-- Red flags and escalation (vet/urgent care) are mentioned but not clear or not specific enough.
-- Some parts are vague or could be misapplied by a beginner.
+Score 2 (Mostly correct but with notable weaknesses):
+- Core information is broadly right, but contains a meaningful inaccuracy, an important omission, or
+  a claim a beginner could easily misapply.
+- For health questions: advice is safe but noticeably incomplete — for example, reassuring the user
+  without acknowledging any scenario where the situation could be serious.
+- Hedges so heavily (“it could be anything”, “hard to say”) that the answer becomes unreliable even
+  though nothing stated is outright wrong.
 
-Score 3 (Safe, sensible, and well-bounded):
-- Prioritizes welfare and safety: hydration, warmth/cooling, clean environment, isolation/quarantine when appropriate.
-- Avoids giving medication/dosage instructions; does not suggest unsafe substances.
-- Clearly explains what to observe and provides “stop and get help now” red flags.
-- Practical guidance fits what a hobby keeper can do at home, and refers to a vet/experienced keeper when needed.
+Score 3 (Correct and appropriate):
+- The factual content is accurate and consistent with standard hobby poultry keeping practice.
+- Advice is safe: does not recommend medications, unsafe substances, or risky home remedies.
+- The answer is calibrated to the question — a routine husbandry question gets a direct factual
+  answer; a health question acknowledges limits of home care and mentions professional help only
+  when that is genuinely warranted by the situation described.
+- A hobby keeper acting on this answer will not be misled or put their birds at risk.
 """
 # 👆 Replace everything between the triple quotes, keeping the variable name.

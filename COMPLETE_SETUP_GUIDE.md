@@ -231,11 +231,21 @@ python rag_functions.py
 
 ## Step 11: Run Evaluation (RAG vs NO-RAG)
 
+All evaluation scripts are run from the project root. Results are saved to `evaluation/results/`.
+
 ```bash
+# Fast heuristic scoring — RAG vs NO-RAG (5-10 min, no ground truth needed)
 python evaluation/evaluate_rag.py
 
-# This takes 5-10 minutes
-# Tests 10 questions comparing RAG vs NO-RAG
+# G-Eval custom metrics via DeepEval (actionability + correctness, no ground truth needed)
+python evaluation/evaluate_deepeval.py
+
+# RAGAS semantic metrics — faithfulness, relevancy, precision, recall
+# Requires ground_truth filled in evaluation/evaluation_data.py first
+python evaluation/evaluate_ragas.py
+
+# Hybrid vs semantic-only retrieval comparison (also needs ground_truth)
+python evaluation/evaluate_retrieval.py
 ```
 
 ---

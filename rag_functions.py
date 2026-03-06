@@ -10,7 +10,12 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple
 
-from langchain_community.document_loaders import TextLoader, PyPDFLoader
+from dotenv import load_dotenv
+load_dotenv()
+
+import pymupdf4llm
+from langchain_core.documents import Document
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_chroma import Chroma
@@ -34,18 +39,23 @@ def get_embedding_model():
     """Get or create the shared embedding model instance."""
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = OllamaEmbeddings(model="nomic-embed-text")
+        _embedding_model = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe"))
     return _embedding_model
 
 
-def get_llm(model: str = "qwen2.5:1.5b-instruct"):
+def get_llm(model: str = None):
     """Get or create the shared LLM instance."""
     global _llm
+    if model is None:
+        model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
     if _llm is None or _llm.model != model:
         _llm = OllamaLLM(
             model=model,
-            temperature=0.7,
-            num_predict=400
+            temperature=0.2,      # low — factual advice needs consistency
+            num_predict=400,      # tight budget — forces concise answers
+            repeat_penalty=1.1,   # prevents small-model repetition loops
+            top_k=40,
+            top_p=0.9,
         )
     return _llm
 
@@ -75,16 +85,17 @@ def load_documents(folder_path: str) -> List:
         for doc in docs:
             doc.metadata["source"] = file_path.name
         documents.extend(docs)
-        print(f"  ✓ Loaded {file_path.name}")
+        print(f"  [OK] Loaded {file_path.name}")
     
     # Load PDF files
     for file_path in Path(folder_path).glob("*.pdf"):
-        loader = PyPDFLoader(str(file_path))
-        docs = loader.load()
-        for doc in docs:
-            doc.metadata["source"] = file_path.name
-        documents.extend(docs)
-        print(f"  ✓ Loaded {file_path.name}")
+        md_text = pymupdf4llm.to_markdown(str(file_path))
+        doc = Document(
+            page_content=md_text,
+            metadata={"source": file_path.name}
+        )
+        documents.append(doc)
+        print(f"  [OK] Loaded {file_path.name} (as Markdown)")
     
     print(f"Total documents loaded: {len(documents)}")
     return documents
@@ -115,7 +126,7 @@ def clean_text(text: str) -> str:
     return text
 
 
-def split_documents(documents: List, chunk_size: int = 600, chunk_overlap: int = 100) -> List:
+def split_documents(documents: List, chunk_size: int = 800, chunk_overlap: int = 120) -> List:
     """
     Split documents into smaller chunks for embedding.
     
@@ -236,7 +247,7 @@ def build_vector_store(
         vectordb.add_texts(texts=batch_texts, metadatas=batch_meta)
         print(f"  Progress: {min(i + batch_size, len(texts))}/{len(texts)}", end="\r")
 
-    print("\n✓ Vector database built successfully")
+    print("\n[OK] Vector database built successfully")
     _save_fingerprint(persist_dir, folder_path)
     return vectordb
 
@@ -266,7 +277,7 @@ def semantic_search(vectordb: Chroma, query: str, k: int = 3) -> List:
 # KEYWORD RETRIEVAL (BM25)
 # =============================================================================
 
-def build_bm25_retriever(chunks: List, k: int = 3) -> BM25Retriever:
+def build_bm25_retriever(chunks: List, k: int = 4) -> BM25Retriever:
     """
     Build BM25 keyword-based retriever.
     
@@ -280,13 +291,17 @@ def build_bm25_retriever(chunks: List, k: int = 3) -> BM25Retriever:
     print("Building BM25 keyword retriever...")
     bm25_retriever = BM25Retriever.from_documents(chunks)
     bm25_retriever.k = k
-    print("✓ BM25 retriever ready")
+    print("[OK] BM25 retriever ready")
     return bm25_retriever
 
 
 # =============================================================================
 # HYBRID RETRIEVAL (SEMANTIC + KEYWORD)
 # =============================================================================
+
+_cached_ensemble = None
+_cached_ensemble_k = None
+
 
 def hybrid_search(
     vectordb: Chroma,
@@ -296,59 +311,71 @@ def hybrid_search(
 ) -> List:
     """
     Perform hybrid search combining semantic (Chroma) and keyword (BM25).
-    
+    Caches the EnsembleRetriever so it isn't rebuilt on every call.
+
     Args:
         vectordb: Chroma vector database
         bm25_retriever: BM25 retriever
         query: Search query
         k: Number of results to return
-    
+
     Returns:
         List of relevant documents
     """
-    # Create semantic retriever
-    semantic_retriever = vectordb.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": k, "fetch_k": k*3}
-    )
+    global _cached_ensemble, _cached_ensemble_k
 
-    # Sync BM25 k to match the requested k
-    bm25_retriever.k = k
+    if _cached_ensemble is None or _cached_ensemble_k != k:
+        semantic_retriever = vectordb.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": k*3}
+        )
+        bm25_retriever.k = k
 
-    # Combine both retrievers
-    # 60% weight to semantic, 40% to keyword
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[semantic_retriever, bm25_retriever],
-        weights=[0.6, 0.4]
-    )
-    
-    results = ensemble_retriever.invoke(query)
-    return results[:k]  # Limit to k results
+        _cached_ensemble = EnsembleRetriever(
+            retrievers=[semantic_retriever, bm25_retriever],
+            weights=[0.6, 0.4]
+        )
+        _cached_ensemble_k = k
+
+    results = _cached_ensemble.invoke(query)
+    return results[:k]
 
 
 # =============================================================================
 # LLM RESPONSE GENERATION
 # =============================================================================
 
-def format_context(documents: List) -> str:
+def format_context(documents: List, max_chars: int = 3000) -> str:
     """
-    Format retrieved documents into context string for LLM.
+    Format retrieved documents into a context string for the LLM.
+    Stops adding chunks once max_chars is reached to protect token budget.
+    At ~4 chars per token, 3000 chars ≈ 750 tokens — keeps input short for small LLMs.
 
     Args:
         documents: List of retrieved documents
+        max_chars:  Hard ceiling on total context length in characters
 
     Returns:
-        Formatted context string
+        Formatted context string, capped at max_chars
     """
     context_parts = []
+    total_chars = 0
+
     for i, doc in enumerate(documents, 1):
-        source = doc.metadata.get('source', 'Unknown')
         content = doc.page_content
-        context_parts.append(f"[Source {i}: {source}]\n{content}\n")
-    return "\n".join(context_parts)
+        entry = content.strip() + "\n"
+
+        if total_chars + len(entry) > max_chars:
+            print(f"  ⚠ Token budget reached — skipping chunk {i} onwards")
+            break
+
+        context_parts.append(entry)
+        total_chars += len(entry)
+
+    return "\n\n".join(context_parts)
 
 
-def generate_response(prompt: str, model: str = "qwen2.5:1.5b-instruct") -> str:
+def generate_response(prompt: str, model: str = None) -> str:
     """
     Generate response using LLM.
 
@@ -359,9 +386,54 @@ def generate_response(prompt: str, model: str = "qwen2.5:1.5b-instruct") -> str:
     Returns:
         Generated response
     """
+    if model is None:
+        model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
     llm = get_llm(model)
     response = llm.invoke(prompt)
     return response
+
+
+# =============================================================================
+# CONVERSATION HISTORY FORMATTING
+# =============================================================================
+
+def format_conversation_history(history: list, max_exchanges: int = 2) -> str:
+    """
+    Format the last N conversation exchanges into a short context prefix.
+
+    Keeps only the most recent exchanges to stay within the small model's
+    token budget (~200 tokens max for 2 exchanges).
+
+    Args:
+        history: List of {"role": "user"|"assistant", "content": "..."} dicts
+        max_exchanges: Maximum number of user+assistant pairs to include
+
+    Returns:
+        Formatted string like:
+        "Previous conversation:
+        User: ...
+        Assistant: ...
+        ---"
+        Or empty string if no history.
+    """
+    if not history:
+        return ""
+
+    # Each "exchange" is one user turn + one assistant turn = 2 items
+    # Take only the last max_exchanges*2 messages
+    recent = history[-(max_exchanges * 2):]
+
+    lines = ["Previous conversation:"]
+    for msg in recent:
+        role = "User" if msg.get("role") == "user" else "Assistant"
+        content = msg.get("content", "").strip()
+        # Truncate very long messages to protect token budget
+        if len(content) > 200:
+            content = content[:200] + "..."
+        lines.append(f"{role}: {content}")
+    lines.append("---")
+
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -374,38 +446,40 @@ def answer_query(
     bm25_retriever: BM25Retriever,
     use_sensors: bool = True,
     use_hybrid: bool = True,
-    k: int = 5
+    k: int = 4,
+    history: list = None,
+    sensor_data: Dict = None,
 ) -> Dict:
     """
-    Complete RAG pipeline to answer a query.
-    
+    Complete RAG pipeline: retrieve relevant chunks, build prompt, generate answer.
+
     Args:
-        query: User's question
-        vectordb: Chroma vector database
-        bm25_retriever: BM25 retriever
-        use_sensors: Whether to check and include sensor data
-        use_hybrid: Whether to use hybrid retrieval (vs semantic only)
-    
+        query:           User's question
+        vectordb:        Chroma vector database
+        bm25_retriever:  BM25 keyword retriever
+        use_sensors:     Whether to check and include live sensor data
+        use_hybrid:      Whether to use hybrid retrieval (vs semantic only)
+        k:               Number of chunks to retrieve
+        history:         Recent conversation history for context
+        sensor_data:     Pre-fetched sensor reading (skips DB call if provided)
+
     Returns:
         Dictionary with answer, sources, and metadata
     """
-    
+
     # Step 1: Get sensor data if enabled
-    sensor_data = None
     sensor_context = None
     has_critical = False
-    
-    if use_sensors:
-        sensor_data = get_latest_sensor_reading()
 
+    if use_sensors:
+        if sensor_data is None:
+            sensor_data = get_latest_sensor_reading()
         if sensor_data and should_include_sensors(query, sensor_data):
             sensor_context = get_sensor_context(sensor_data)
             critical_alerts = get_critical_alerts(sensor_data)
-            # Only activate emergency mode when BOTH critical AND query
-            # is about environment. "How often do chickens lay eggs?"
-            # should NOT trigger emergency mode even with critical sensors.
+            # Emergency mode only when critical AND user is asking about their coop
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
-    
+
     # Step 2: Retrieve relevant documents
     if use_hybrid:
         documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
@@ -413,33 +487,35 @@ def answer_query(
     else:
         documents = semantic_search(vectordb, query, k=k)
         retrieval_method = "semantic"
-    
-    # Step 3: Format context
+
+    # Step 3: Build prompt
     context = format_context(documents)
-    
-    # Step 4: Build prompt
+    history_prefix = format_conversation_history(history or [])
+
     prompt = get_prompt(
         query=query,
         context=context,
         sensor_context=sensor_context,
-        has_critical=has_critical
+        has_critical=has_critical,
     )
-    
-    # Step 5: Generate response
+
+    if history_prefix:
+        prompt = history_prefix + "\n\n" + prompt
+
+    # Step 4: Generate response
     response = generate_response(prompt)
-    
-    # Step 6: Package results
-    result = {
+
+    return {
         "query": query,
         "answer": response,
-        "sources": [doc.metadata.get('source', 'Unknown') for doc in documents],
+        "sources": [doc.metadata.get("source", "Unknown") for doc in documents],
+        "documents": documents,
         "sensor_included": sensor_context is not None,
+        "sensor_data": sensor_data,
         "sensor_context": sensor_context,
         "has_critical": has_critical,
-        "retrieval_method": retrieval_method
+        "retrieval_method": retrieval_method,
     }
-    
-    return result
 
 
 # =============================================================================
@@ -454,7 +530,7 @@ if __name__ == "__main__":
     
     # Load and prepare knowledge base
     docs = load_documents("test_docs")
-    chunks = split_documents(docs, chunk_size=600)
+    chunks = split_documents(docs, chunk_size=800)
     
     # Build retrievers
     vectordb = build_vector_store(chunks)

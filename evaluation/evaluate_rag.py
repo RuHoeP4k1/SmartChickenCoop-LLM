@@ -19,6 +19,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
+
 from langchain_ollama import OllamaLLM
 
 from rag_functions import (
@@ -39,18 +42,34 @@ def get_norag_answer(question: str) -> Dict:
         Dictionary with answer and timing
     """
     llm = OllamaLLM(
-        model="qwen2.5:1.5b-instruct",
-        temperature=0.7,
-        num_predict=400
+        model=os.getenv("OLLAMA_MODEL", "smollm2:1.7b"),
+        temperature=0.3,
+        num_predict=600
     )
 
-    prompt = f"""You are a helpful chicken-keeping assistant.
+    prompt = f"""You are ChickenCare AI — a practical assistant for hobby chicken keepers.
 
-Answer this question based on your knowledge:
+Hard rules (follow in every response):
+- NEVER suggest medications, dosages, or human medicines for chickens
+- NEVER recommend essential oils, vinegar, bleach, or chemical treatments
+- ALWAYS refer to a vet or experienced keeper for serious illness or injury
+- Use plain, beginner-friendly language
 
-Question: {question}
+<question>
+{question}
+</question>
 
-Answer:"""
+Answer in this format:
+
+**Short answer:** (1-2 sentences — direct and specific)
+
+**What to do:**
+1. [Specific step]
+2. [Second step]
+3. [What to monitor and for how long]
+(Write "No action needed" if the question is purely factual.)
+
+**Call a vet if:** [1-2 specific red flags. Write "Not applicable" if the question is not about health or injury.]"""
 
     start_time = time.time()
     answer = llm.invoke(prompt)
@@ -62,13 +81,21 @@ Answer:"""
     }
 
 
-def evaluate_answer_quality(answer: str, expected_topics: List[str]) -> Dict:
+# Factual categories warrant shorter, focused answers (15–100 words ideal).
+# Advisory categories (health, behavior, etc.) can legitimately run longer (30–200 words).
+_FACTUAL_CATEGORIES = {"general", "environment"}
+
+
+def evaluate_answer_quality(answer: str, expected_topics: List[str], category: str = "general") -> Dict:
     """
     Evaluate answer quality based on simple heuristic metrics.
 
     Args:
         answer: Generated answer
         expected_topics: Topics that should be covered
+        category: Question category from TEST_CASES. Factual categories
+                  ("general", "environment") use a 15–100 word ideal range.
+                  All other categories use 30–200 words.
 
     Returns:
         Dictionary with quality scores
@@ -82,25 +109,40 @@ def evaluate_answer_quality(answer: str, expected_topics: List[str]) -> Dict:
     )
     topic_score = (topics_covered / len(expected_topics)) * 100 if expected_topics else 0
 
-    # 2. Length (ideal 100-300 words)
+    # 2. Length — category-aware ideal range
+    # Factual questions warrant shorter answers; advisory/problem-solving questions
+    # often need more words to be genuinely useful.
     word_count = len(answer.split())
-    if 100 <= word_count <= 300:
-        length_score = 100
-    elif word_count < 100:
-        length_score = max(0, word_count)  # Penalize too short
+    lower, upper = (15, 100) if category in _FACTUAL_CATEGORIES else (30, 200)
+
+    if lower <= word_count <= upper:
+        length_score = 100.0
+    elif word_count < lower:
+        length_score = max(0.0, (word_count / lower) * 100)
     else:
-        length_score = max(0, 100 - (word_count - 300) / 10)  # Penalize too long
+        # Gentle slope: 0.6 pts per word over the upper bound.
+        # Floor at 40 — a long answer is wordy, not worthless.
+        length_score = max(40.0, 100.0 - (word_count - upper) * 0.6)
 
-    # 3. Actionability (has steps or clear actions)
-    has_numbers = any(str(i) in answer for i in range(1, 6))
-    has_action_words = any(
-        word in answer_lower
-        for word in ["should", "must", "need to", "make sure", "check", "ensure"]
+    # 3. Actionability (natural-language advice signals — gradient, not binary)
+    action_signals = [
+        "should", "must", "need to", "make sure", "check", "ensure",
+        "try", "consider", "keep", "avoid", "provide", "watch for",
+        "look for", "add", "remove", "adjust", "monitor", "clean",
+        "replace", "increase", "decrease", "contact a vet", "call a vet",
+    ]
+    hits = sum(1 for phrase in action_signals if phrase in answer_lower)
+    # 0 hits = 30 (answer exists but gives no advice), caps at 100 with 4+ hits
+    actionable_score = min(100, 30 + hits * 17.5)
+
+    # Overall score: actionability weighted highest (primary purpose of the system),
+    # topic coverage second (important but fragile — substring matching misses synonyms),
+    # length last (secondary stylistic signal, less punitive after formula fix).
+    overall_score = (
+        actionable_score * 0.40
+        + topic_score    * 0.35
+        + length_score   * 0.25
     )
-    actionable_score = 100 if (has_numbers or has_action_words) else 50
-
-    # Overall score (weighted average)
-    overall_score = (topic_score * 0.5 + length_score * 0.3 + actionable_score * 0.2)
 
     return {
         "topic_coverage": topic_score,
@@ -108,7 +150,8 @@ def evaluate_answer_quality(answer: str, expected_topics: List[str]) -> Dict:
         "actionable": actionable_score,
         "overall": overall_score,
         "word_count": word_count,
-        "topics_found": topics_covered
+        "topics_found": topics_covered,
+        "category": category,
     }
 
 
@@ -153,7 +196,7 @@ def run_evaluation():
             vectordb=vectordb,
             bm25_retriever=bm25,
             use_sensors=False,
-            use_hybrid=True
+            use_hybrid=True,
         )
         rag_time = time.time() - start
 
@@ -162,8 +205,8 @@ def run_evaluation():
         norag_result = get_norag_answer(question)
 
         # Evaluate both answers
-        rag_quality = evaluate_answer_quality(rag_result["answer"], expected_topics)
-        norag_quality = evaluate_answer_quality(norag_result["answer"], expected_topics)
+        rag_quality = evaluate_answer_quality(rag_result["answer"], expected_topics, category)
+        norag_quality = evaluate_answer_quality(norag_result["answer"], expected_topics, category)
 
         results["rag"].append({
             "question": question,
