@@ -543,3 +543,51 @@ your-project/
 **You're ready!**
 
 Start with: `python generate_demo_data.py`
+
+---
+
+## Alternative: Docker Setup
+
+If you have Docker Desktop installed, you can skip Steps 1–2 (PostgreSQL) and Steps 4–9 entirely.
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- Ollama installed on the host with models pulled (Step 3 still required)
+- Supabase account with a project (or use local Postgres — see note below)
+
+### Steps
+
+**1. Configure `.env`**
+Set `DATABASE_URL` to your Supabase connection string (Settings → Database → URI, port 5432):
+```
+DATABASE_URL=postgresql://postgres.[ref]:[password]@aws-0-eu-west-1.pooler.supabase.com:5432/postgres
+```
+
+**2. Build and start**
+```bash
+docker compose up --build
+```
+The first run embeds all documents (~20 minutes). Subsequent starts load the cached vector DB and take seconds.
+
+**3. Open the app**
+Visit http://localhost:8000
+
+### Useful commands
+```bash
+docker compose up           # start (no rebuild)
+docker compose down         # stop (data preserved)
+docker compose down -v      # stop + wipe vector DB (forces re-embed next start)
+docker compose up --build   # rebuild image (needed after code or requirements changes)
+```
+
+### What lives where
+| Thing | Where |
+|-------|-------|
+| Database | Supabase (outside Docker) |
+| Ollama LLM | Host machine (outside Docker) |
+| Vector DB (Chroma) | `./chroma_db/` bind-mounted into container |
+| Knowledge base | `./test_docs/` bind-mounted read-only |
+| Secrets | `.env` on disk — injected at runtime, never in image |
+
+### Note: local Postgres instead of Supabase
+Leave `DATABASE_URL=` blank in `.env` and add a `postgres` service to `docker-compose.yml` — see the compose file comments.

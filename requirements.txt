@@ -54,3 +54,4 @@ deepeval==3.8.4
 
 # Claude API judge for RAGAS evaluation (optional — only needed if ANTHROPIC_API_KEY is set)
 langchain-anthropic
+rank_bm25

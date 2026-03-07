@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env                        # secrets injected at runtime, never baked into image
+    environment:
+      OLLAMA_HOST: http://host.docker.internal:11434  # reach host Ollama from inside container
+    volumes:
+      - ./chroma_db:/app/chroma_db        # use existing local chroma_db directly
+      - ./test_docs:/app/test_docs:ro     # knowledge base, read-only inside container
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s                   # give uvicorn time to start before first check

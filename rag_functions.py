@@ -165,13 +165,14 @@ def _docs_fingerprint(folder_path: str) -> str:
     """
     Build a hash fingerprint of the knowledge-base folder.
     Changes when files are added, removed, or modified.
+    Uses file content hash (not mtime) so it works correctly inside Docker on Windows.
     """
-    entries = []
+    hasher = hashlib.md5()
     for p in sorted(Path(folder_path).glob("*")):
         if p.suffix.lower() in (".txt", ".pdf"):
-            entries.append(f"{p.name}:{p.stat().st_mtime_ns}")
-    raw = "|".join(entries)
-    return hashlib.md5(raw.encode()).hexdigest()
+            hasher.update(p.name.encode())
+            hasher.update(p.read_bytes())
+    return hasher.hexdigest()
 
 
 def _needs_rebuild(persist_dir: str, folder_path: str) -> bool:
@@ -226,7 +227,9 @@ def build_vector_store(
     if os.path.exists(persist_dir):
         print("Knowledge base changed — rebuilding vector database...")
         import shutil
-        shutil.rmtree(persist_dir)
+        for item in os.listdir(persist_dir):
+            item_path = os.path.join(persist_dir, item)
+            shutil.rmtree(item_path) if os.path.isdir(item_path) else os.remove(item_path)
     else:
         print("Building new vector database...")
 
