@@ -65,6 +65,14 @@ function IconGear({ className }) {
   )
 }
 
+function IconCloud({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10a6 6 0 10-11.472 2.47A4 4 0 107 18h11a4 4 0 00.472-7.97A6.014 6.014 0 0018 10z" />
+    </svg>
+  )
+}
+
 function IconSun({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -116,6 +124,7 @@ const ICON_MAP = {
   alerts:     IconBell,
   eggs:       IconEgg,
   automation: IconGear,
+  weather:    IconCloud,
 }
 
 /* ── Layout ───────────────────────────────────────────────────────── */

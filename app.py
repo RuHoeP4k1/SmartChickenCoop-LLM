@@ -5,6 +5,7 @@ Run with: uvicorn app:app --reload
 
 import os
 import logging
+import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,8 @@ KNOWLEDGE_BASE_PATH  = os.getenv("KNOWLEDGE_BASE_PATH", "test_docs")
 SCHEDULER_INTERVAL   = int(os.getenv("SCHEDULER_INTERVAL", "60"))   # seconds
 SIMULATION_MODE      = os.getenv("SIMULATION_MODE", "false").lower() == "true"
 CHAT_HISTORY_TURNS   = int(os.getenv("CHAT_HISTORY_TURNS", "2"))
+COOP_LAT             = float(os.getenv("COOP_LAT", "50.8798"))
+COOP_LON             = float(os.getenv("COOP_LON", "4.7005"))
 
 
 @asynccontextmanager
@@ -274,6 +277,29 @@ def get_history(
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
     return {"readings": readings, "range": range, "count": len(readings)}
+
+
+@app.get("/weather")
+def get_weather():
+    """
+    Fetch current weather + 3-day forecast for the coop location via Open-Meteo.
+    No API key required. Coordinates set via COOP_LAT / COOP_LON in .env.
+    """
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={COOP_LAT}&longitude={COOP_LON}"
+        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
+        "precipitation,weather_code,wind_speed_10m"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,"
+        "sunrise,sunset,daylight_duration,weather_code"
+        "&timezone=Europe%2FBrussels&forecast_days=3"
+    )
+    try:
+        resp = httpx.get(url, timeout=8)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Weather API error: {e}")
 
 
 # ---------------------------------------------------------------------------

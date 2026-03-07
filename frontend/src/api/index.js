@@ -28,3 +28,9 @@ export async function getEvents(limit = 30, eventType = null) {
   if (!res.ok) throw new Error(`Events request failed (${res.status})`)
   return res.json()
 }
+
+export async function getWeather() {
+  const res = await fetch('/weather')
+  if (!res.ok) throw new Error(`Weather request failed (${res.status})`)
+  return res.json()
+}
