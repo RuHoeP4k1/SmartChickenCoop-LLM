@@ -443,9 +443,11 @@ def generate_response(prompt: str, model: str = None) -> str:
     llm = get_llm(model)
     response = llm.invoke(prompt)
     # ChatOpenAI (OpenRouter) returns an AIMessage; OllamaLLM returns a plain string
-    if hasattr(response, "content"):
-        return response.content
-    return response
+    text = response.content if hasattr(response, "content") else response
+    # Strip <think>...</think> blocks (Qwen3 and similar reasoning models)
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return text
 
 
 # =============================================================================

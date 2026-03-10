@@ -30,18 +30,16 @@ from pathlib import Path
 PARAM_GRID = {
     "llm_model": [
         "smollm2:1.7b",
-        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
-        # Full sweep models (restore when running Round 1):
-        # "smollm2:0.5b",
-        # "openrouter/meta-llama/llama-3.1-8b-instruct:free",
-        # "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+        # Round 1 models (uncomment when ready):
+        # "openrouter/meta-llama/llama-3.1-8b-instruct",
+        # "openrouter/mistralai/mistral-small-3.2-24b-instruct",
     ],
     "embed_model": [
         "nomic-embed-text-v2-moe",
         # "text-embedding-3-small",  # requires OPENAI_API_KEY — enable for full sweep
     ],
     "chunk_size": [800],  # smoke test: reuse existing chroma_db (800 chunks already embedded)
-    "k":          [2, 4, 6],
+    "k":          [3, 4, 5],
     "weights": [
         [0.5, 0.5],   # 50% semantic, 50% BM25
         [0.0, 1.0],   # pure semantic (use_hybrid=False in answer_query)
@@ -51,7 +49,7 @@ PARAM_GRID = {
 
 # Factor key order must match LEVELS order below
 FACTOR_KEYS = ["llm_model", "embed_model", "chunk_size", "k", "weights", "search_type"]
-LEVELS      = [2, 1, 1, 3, 2, 2]   # smoke test: chunk=1 (800 only), embed=1 (nomic only)
+LEVELS      = [1, 1, 1, 3, 2, 2]   # smoke test: llm=1, chunk=1 (800 only), embed=1 (nomic only)
 
 # Human-readable short labels for the design table
 FACTOR_LABELS = {
@@ -83,7 +81,8 @@ def build_design(n_runs: int = 18, seed: int = 42) -> list[dict]:
         np.random.seed(seed)
         n_factors = len(FACTOR_KEYS)
         # LHS gives uniform coverage; map continuous [0,1) samples to integer level indices
-        lhs_matrix = lhs(n_factors, samples=n_runs, criterion="maximin")
+        criterion = "maximin" if n_runs > 1 else None
+        lhs_matrix = lhs(n_factors, samples=n_runs, criterion=criterion)
         coded = np.floor(lhs_matrix * np.array(LEVELS)).astype(int)
         # Clip to valid range in case of floating point edge
         coded = np.clip(coded, 0, np.array(LEVELS) - 1)

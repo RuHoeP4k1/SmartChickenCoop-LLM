@@ -38,6 +38,11 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
 from langchain_openai import ChatOpenAI
+try:
+    from langchain_anthropic import ChatAnthropic
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:
+    _ANTHROPIC_AVAILABLE = False
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics import (
     GEval,
@@ -71,13 +76,33 @@ CHECKPOINT_FILE  = os.path.join(RESULTS_DIR, "sweep_checkpoint.json")
 DESIGN_MD        = os.path.join(RESULTS_DIR, "doe_design.md")
 
 # ---------------------------------------------------------------------------
-# OpenRouter judge (free Gemini model — different family from all tested LLMs)
+# Judge models
 # ---------------------------------------------------------------------------
 JUDGE_MODEL = os.getenv("SWEEP_JUDGE_MODEL", "google/gemini-2.0-flash-exp:free")
 
+_judge_token_usage = {"input": 0, "output": 0}
+
+
+def _track_usage(response):
+    usage = getattr(response, "usage_metadata", None)
+    if isinstance(usage, dict):
+        _judge_token_usage["input"]  += usage.get("input_tokens",  0)
+        _judge_token_usage["output"] += usage.get("output_tokens", 0)
+    elif usage is not None:
+        _judge_token_usage["input"]  += getattr(usage, "input_tokens",  0)
+        _judge_token_usage["output"] += getattr(usage, "output_tokens", 0)
+
+
+def print_token_usage(label: str):
+    inp, out = _judge_token_usage["input"], _judge_token_usage["output"]
+    if inp + out == 0:
+        return
+    print(f"\nJudge token usage ({label}): {inp:,} in / {out:,} out")
+    print(f"  Check OpenRouter or Anthropic dashboard for exact cost.")
+
 
 class OpenRouterJudge(DeepEvalBaseLLM):
-    """DeepEval-compatible judge using OpenRouter's free Gemini model."""
+    """DeepEval-compatible judge via OpenRouter (tracks token usage)."""
 
     def __init__(self, model_name: str = JUDGE_MODEL):
         self.model_name = model_name
@@ -93,6 +118,7 @@ class OpenRouterJudge(DeepEvalBaseLLM):
 
     def generate(self, prompt: str) -> str:
         response = self.model.invoke(prompt)
+        _track_usage(response)
         return response.content if hasattr(response, "content") else str(response)
 
     async def a_generate(self, prompt: str) -> str:
@@ -100,6 +126,36 @@ class OpenRouterJudge(DeepEvalBaseLLM):
 
     def get_model_name(self) -> str:
         return f"OpenRouter/{self.model_name}"
+
+
+# ---------------------------------------------------------------------------
+# Claude Haiku judge (Anthropic API)
+# ---------------------------------------------------------------------------
+
+class ClaudeHaikuJudge(DeepEvalBaseLLM):
+    """DeepEval-compatible judge using Claude Haiku via Anthropic API."""
+
+    def __init__(self, model_name: str = "claude-haiku-4-5-20251001"):
+        self.model_name = model_name
+        self.model = ChatAnthropic(
+            model=model_name,
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            temperature=0,
+        )
+
+    def load_model(self):
+        return self.model
+
+    def generate(self, prompt: str) -> str:
+        response = self.model.invoke(prompt)
+        _track_usage(response)
+        return response.content if hasattr(response, "content") else str(response)
+
+    async def a_generate(self, prompt: str) -> str:
+        return self.generate(prompt)
+
+    def get_model_name(self) -> str:
+        return f"Anthropic/{self.model_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +321,15 @@ def run_config(
 
 
 def _measure(metric, test_case: LLMTestCase) -> float:
-    """Measure a DeepEval metric and return its score."""
-    metric.measure(test_case)
-    return metric.score
+    """Measure a DeepEval metric and return its score. Returns -1 on JSON parse failure."""
+    try:
+        metric.measure(test_case)
+        return metric.score
+    except ValueError as e:
+        if "json" in str(e).lower():
+            print(f"  ⚠ JSON parse error in {metric.__class__.__name__} — skipping (score=-1)")
+            return -1.0
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +381,8 @@ def main():
     parser.add_argument("--n-questions", type=int, default=None,  help="Limit questions per config (smoke test)")
     parser.add_argument("--dry-run",     action="store_true",     help="Print design table and exit")
     parser.add_argument("--fresh",       action="store_true",     help="Ignore checkpoint, start from scratch")
+    parser.add_argument("--judge",       choices=["haiku", "openrouter"], default=None,
+                        help="Force judge: 'haiku' (Anthropic) or 'openrouter' (uses SWEEP_JUDGE_MODEL)")
     args = parser.parse_args()
 
     Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
@@ -350,7 +414,16 @@ def main():
         print(f"Resuming from checkpoint: {len(results)}/{len(configs)} configs already done.")
 
     # Judge setup
-    judge = OpenRouterJudge(model_name=JUDGE_MODEL)
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    use_haiku = (args.judge == "haiku") or (args.judge is None and anthropic_key and _ANTHROPIC_AVAILABLE)
+    use_openrouter = (args.judge == "openrouter") or not use_haiku
+    if use_haiku and not use_openrouter:
+        judge = ClaudeHaikuJudge()
+        judge_label = "Claude Haiku (Anthropic)"
+    else:
+        judge = OpenRouterJudge(model_name=JUDGE_MODEL)
+        judge_label = JUDGE_MODEL
+    print(f"Judge: {judge_label}")
 
     # Custom G-Eval metrics (1–3 scale, domain-specific criteria)
     actionability_metric = GEval(
@@ -407,6 +480,8 @@ def main():
 
     print(f"\nResults saved → {RESULTS_FILE}")
     print_ranking_table(results)
+    print_token_usage(judge_label)
+
 
     # Clean up checkpoint on successful completion
     if os.path.exists(CHECKPOINT_FILE):
