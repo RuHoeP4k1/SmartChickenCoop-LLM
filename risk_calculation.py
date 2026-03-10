@@ -428,16 +428,16 @@ class SensitivityParams:
 # Source paper table: very sensitive, sensitive, medium resistant, resistant
 ORIGINAL_SENSITIVITIES = {
     SensitivityLevel.VERY_SENSITIVE: SensitivityParams(
-        k11=1.0, k12=2.0, A=1.0, B=7.0, C=2.0, rh_above_20=80.0
+        k11=1.0, k12=2.0, A=1.0, B=7.0, C=2.0, rh_above_20=70.0
     ),
     SensitivityLevel.SENSITIVE: SensitivityParams(
-        k11=0.578, k12=0.386, A=0.3, B=6.0, C=1.0, rh_above_20=80.0
+        k11=0.578, k12=0.386, A=0.3, B=6.0, C=1.0, rh_above_20=70.0
     ),
     SensitivityLevel.MEDIUM_RESISTANT: SensitivityParams(
-        k11=0.072, k12=0.097, A=0.0, B=5.0, C=1.5, rh_above_20=85.0
+        k11=0.072, k12=0.097, A=0.0, B=5.0, C=1.5, rh_above_20=70.0
     ),
     SensitivityLevel.RESISTANT: SensitivityParams(
-        k11=0.033, k12=0.014, A=0.0, B=3.0, C=1.0, rh_above_20=85.0
+        k11=0.033, k12=0.014, A=0.0, B=3.0, C=1.0, rh_above_20=70.0
     ),
 }
 
@@ -459,9 +459,9 @@ class VTTOriginalParams:
     sensitivity: SensitivityLevel = SensitivityLevel.VERY_SENSITIVE
     wood_type_w: int = 0 # 0 = pine, 1 = spruce
     surface_quality_sq: int = 0 # 0 = sawn, 1 = kiln dried
-    p_t: float = 0.68
-    p_rh: float = 13.9
-    p_c: float = 66.02
+    p_t: float = 0.45
+    p_rh: float = 9.0
+    p_c: float = 58.0
     decline_method: DeclineMethod = DeclineMethod.WOOD
     c_decline: float = 1.0
     # VTT definieert dM/dt per 24 uur; sample_minutes bepaalt alleen de integratiestap.
@@ -545,8 +545,8 @@ def growth_rate_per_24h(
 
     # Numerieke bescherming - log(0) is niet gedefinieerd, dus we zorgen dat T en RH binnen een redelijke range blijven voor de logaritme.
     t_for_log = max(temp_c, 0.1)
-    rh_for_log = min(max(rh, 0.1), 100.0)
-
+    rh_for_log = min(max(rh, 0.1), 100)
+    
     exponent_term = (
         -params.p_t * log(t_for_log)
         -params.p_rh * log(rh_for_log)
@@ -566,14 +566,14 @@ def decline_rate_per_24h(state: VTTState, params: VTTOriginalParams) -> float:
     hours_below = state.consecutive_unfavourable_minutes / 60.0
 
     if params.decline_method == DeclineMethod.NON_WOOD:
-        base_decline = -0.032
+        base_decline = -0.01
     else:
         if hours_below <= 6.0:
-            base_decline = -0.032
+            base_decline = -0.01
         elif hours_below <= 24.0:
             base_decline = 0.0
         else:
-            base_decline = -0.016
+            base_decline = -0.008
 
     return params.c_decline * base_decline
 
@@ -609,7 +609,12 @@ def vtt_original_step(
         )
     else:
         state.consecutive_unfavourable_minutes += params.sample_minutes
-        dmdt_24h = decline_rate_per_24h(state, params)
+        # Physical guard: once M hits zero, it cannot decline below zero.
+        # Keep M flat at 0 until favourable conditions create growth again.
+        if state.m <= 0.0:
+            dmdt_24h = 0.0
+        else:
+            dmdt_24h = decline_rate_per_24h(state, params)
 
     delta_m = dmdt_24h * (params.sample_minutes / (24.0 * 60.0))
     state.m += delta_m
