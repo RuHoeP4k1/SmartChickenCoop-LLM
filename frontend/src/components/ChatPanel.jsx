@@ -25,6 +25,19 @@ function UserMessage({ content }) {
 }
 
 function AssistantMessage({ msg }) {
+  const [openSource, setOpenSource] = useState(null)
+
+  const uniqueSources = msg.sources ? [...new Set(msg.sources)] : []
+
+  function toggleSource(src) {
+    setOpenSource(prev => (prev === src ? null : src))
+  }
+
+  // All chunks for the currently-open source
+  const visibleChunks = openSource && msg.chunks
+    ? msg.chunks.filter(c => c.source === openSource)
+    : []
+
   return (
     <div className="flex justify-start mb-4">
       <div className="max-w-2xl w-full">
@@ -60,16 +73,52 @@ function AssistantMessage({ msg }) {
           </ReactMarkdown>
         </div>
 
-        {/* Source chips */}
-        {msg.sources && msg.sources.length > 0 && (
+        {/* Source chips — clickable, toggle chunk drawer */}
+        {uniqueSources.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5 px-1">
-            {[...new Set(msg.sources)].map(src => (
-              <span
+            {uniqueSources.map(src => (
+              <button
                 key={src}
-                className="text-xs bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-700/40 rounded-full px-2.5 py-0.5"
+                onClick={() => toggleSource(src)}
+                className={`text-xs border rounded-full px-2.5 py-0.5 transition-colors ${
+                  openSource === src
+                    ? 'bg-amber-200 dark:bg-amber-700/50 text-amber-800 dark:text-amber-200 border-amber-400 dark:border-amber-500'
+                    : 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-700/40 hover:bg-amber-100 dark:hover:bg-amber-800/30'
+                }`}
               >
-                {src}
-              </span>
+                {src} {openSource === src ? '▲' : '▼'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Chunk drawer */}
+        {visibleChunks.length > 0 && (
+          <div className="mt-2 px-1 space-y-2">
+            {visibleChunks.map((chunk, i) => (
+              <div
+                key={i}
+                className="bg-stone-50 dark:bg-stone-800/60 border border-stone-200 dark:border-stone-700 rounded-xl px-3 py-2.5"
+              >
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">
+                  {chunk.source} — chunk {i + 1}
+                </p>
+                <ReactMarkdown
+                  className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed"
+                  components={{
+                    p:      ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
+                    strong: ({ children }) => <strong className="font-semibold text-stone-800 dark:text-stone-200">{children}</strong>,
+                    em:     ({ children }) => <em className="italic">{children}</em>,
+                    ul:     ({ children }) => <ul className="list-disc list-inside mb-1.5 space-y-0.5">{children}</ul>,
+                    ol:     ({ children }) => <ol className="list-decimal list-inside mb-1.5 space-y-0.5">{children}</ol>,
+                    li:     ({ children }) => <li>{children}</li>,
+                    code:   ({ children }) => <code className="bg-stone-100 dark:bg-stone-700 text-amber-700 dark:text-amber-300 rounded px-1 font-mono border border-stone-200 dark:border-stone-600">{children}</code>,
+                    pre:    ({ children }) => <pre className="bg-stone-100 dark:bg-stone-700 border border-stone-200 dark:border-stone-600 rounded-lg p-2 font-mono overflow-x-auto my-1.5">{children}</pre>,
+                  }}
+                >
+                  {chunk.content}
+                </ReactMarkdown>
+              </div>
             ))}
           </div>
         )}
@@ -137,6 +186,7 @@ export default function ChatPanel() {
           role: 'assistant',
           content: result.answer,
           sources: result.sources,
+          chunks: result.chunks,
           sensor_context: result.sensor_context,
           has_critical: result.has_critical,
         },

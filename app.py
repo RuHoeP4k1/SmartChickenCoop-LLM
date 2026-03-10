@@ -121,6 +121,7 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
     sources: list[str]
+    chunks: list[dict]
     sensor_included: bool
     sensor_context: Optional[str]
     has_critical: bool
@@ -196,7 +197,14 @@ def ask_question(request: QueryRequest):
     except Exception as e:
         logger.warning(f"Failed to log event: {e}")
 
-    return QueryResponse(**{k: v for k, v in result.items() if k not in ("documents", "sensor_data")})
+    chunks = [
+        {"source": doc.metadata.get("source", "Unknown"), "content": doc.page_content}
+        for doc in result.get("documents", [])
+    ]
+    return QueryResponse(**{
+        **{k: v for k, v in result.items() if k not in ("documents", "sensor_data")},
+        "chunks": chunks,
+    })
 
 
 @app.post("/setup-db")
