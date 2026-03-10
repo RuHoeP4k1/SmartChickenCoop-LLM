@@ -7,10 +7,10 @@ DeepEval G-Eval (actionability + correctness), and saves results with
 full checkpoint/resume support.
 
 Usage:
-    python evaluation/sweep.py                    # full sweep (~60 configs)
+    python evaluation/sweep.py                    # full sweep (18 runs, main effects)
     python evaluation/sweep.py --dry-run          # print design table only
     python evaluation/sweep.py --n-questions 3    # smoke test (3 questions per config)
-    python evaluation/sweep.py --n-runs 12        # only run first N configs
+    python evaluation/sweep.py --n-runs 6         # smoke test (6 configs only)
 
 Prerequisites:
     pip install pyDOE3 langchain-openai deepeval langchain-anthropic
@@ -315,7 +315,7 @@ def _short(s: str, n: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="RAG hyperparameter sweep")
-    parser.add_argument("--n-runs",      type=int, default=60,    help="Number of D-Optimal runs")
+    parser.add_argument("--n-runs",      type=int, default=None,  help="Number of runs (default: auto from LEVELS)")
     parser.add_argument("--n-questions", type=int, default=None,  help="Limit questions per config (smoke test)")
     parser.add_argument("--dry-run",     action="store_true",     help="Print design table and exit")
     parser.add_argument("--fresh",       action="store_true",     help="Ignore checkpoint, start from scratch")
@@ -323,9 +323,16 @@ def main():
 
     Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
 
-    # Build design
-    print(f"Generating D-Optimal design ({args.n_runs} runs)...")
-    configs = build_design(n_runs=args.n_runs)
+    # Build design — auto-calculate minimum main-effects runs if not overridden
+    from sweep_config import LEVELS as _LEVELS
+    if args.n_runs is None:
+        # Main effects minimum: sum(levels - 1) + 1, rounded up to nearest multiple of 3
+        min_runs = sum(l - 1 for l in _LEVELS) + 1
+        n_runs = max(min_runs + (3 - min_runs % 3) % 3, min_runs)  # round up to multiple of 3
+    else:
+        n_runs = args.n_runs
+    print(f"Generating main-effects design ({n_runs} runs)...")
+    configs = build_design(n_runs=n_runs)
     save_design_md(configs, DESIGN_MD)
     print(f"Design matrix saved → {DESIGN_MD}")
 

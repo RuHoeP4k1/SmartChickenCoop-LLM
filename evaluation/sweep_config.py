@@ -68,11 +68,12 @@ FACTOR_LABELS = {
 # D-Optimal design generation
 # ---------------------------------------------------------------------------
 
-def build_design(n_runs: int = 60, seed: int = 42) -> list[dict]:
+def build_design(n_runs: int = 18, seed: int = 42) -> list[dict]:
     """
-    Generate a space-filling design (LHS via pyDOE3) and decode to real parameter dicts.
+    Generate a main-effects screening design (LHS via pyDOE3) and decode to real parameter dicts.
 
-    Returns a list of config dicts, one per run.
+    18 runs covers all main effects for 6 factors (min ~12, 18 gives comfortable margin).
+    Use n_runs=60 only if estimating two-way interactions is needed.
     Falls back to a coverage-based greedy design if pyDOE3 is not installed.
     """
     try:
