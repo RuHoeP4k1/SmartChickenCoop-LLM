@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import pymupdf4llm
+pymupdf4llm.use_layout(False)  # disable broken layout path in pymupdf4llm 0.3.4 + PyMuPDF 1.27.2
 from langchain_core.documents import Document
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -32,31 +33,55 @@ from db_utils import get_latest_sensor_reading
 # =============================================================================
 
 _embedding_model = None
+_embedding_model_id = None
 _llm = None
+_llm_model_id = None
 
 
-def get_embedding_model():
+def get_embedding_model(model: str = None):
     """Get or create the shared embedding model instance."""
-    global _embedding_model
-    if _embedding_model is None:
-        _embedding_model = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe"))
+    global _embedding_model, _embedding_model_id
+    if model is None:
+        model = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text-v2-moe")
+    if _embedding_model is None or _embedding_model_id != model:
+        if model == "text-embedding-3-small":
+            from langchain_openai import OpenAIEmbeddings
+            _embedding_model = OpenAIEmbeddings(model=model)
+        else:
+            _embedding_model = OllamaEmbeddings(model=model)
+        _embedding_model_id = model
     return _embedding_model
 
 
 def get_llm(model: str = None):
-    """Get or create the shared LLM instance."""
-    global _llm
+    """Get or create the shared LLM instance.
+
+    Supports local Ollama models and OpenRouter models (prefix: 'openrouter/').
+    Example: get_llm("openrouter/meta-llama/llama-3.1-8b-instruct:free")
+    """
+    global _llm, _llm_model_id
     if model is None:
         model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
-    if _llm is None or _llm.model != model:
-        _llm = OllamaLLM(
-            model=model,
-            temperature=0.2,      # low — factual advice needs consistency
-            num_predict=400,      # tight budget — forces concise answers
-            repeat_penalty=1.1,   # prevents small-model repetition loops
-            top_k=40,
-            top_p=0.9,
-        )
+    if _llm is None or _llm_model_id != model:
+        if model.startswith("openrouter/"):
+            from langchain_openai import ChatOpenAI
+            _llm = ChatOpenAI(
+                model=model.removeprefix("openrouter/"),
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                temperature=0.2,
+                max_tokens=400,
+            )
+        else:
+            _llm = OllamaLLM(
+                model=model,
+                temperature=0.2,      # low — factual advice needs consistency
+                num_predict=400,      # tight budget — forces concise answers
+                repeat_penalty=1.1,   # prevents small-model repetition loops
+                top_k=40,
+                top_p=0.9,
+            )
+        _llm_model_id = model
     return _llm
 
 
@@ -199,6 +224,7 @@ def build_vector_store(
     chunks: List,
     persist_dir: str = "chroma_db",
     folder_path: str = "test_docs",
+    embedding_model: str = None,
 ) -> Chroma:
     """
     Build or load Chroma vector database.
@@ -208,11 +234,12 @@ def build_vector_store(
         chunks: Document chunks to embed
         persist_dir: Directory to store the database
         folder_path: Knowledge-base folder (used for change detection)
+        embedding_model: Embedding model name override (None = use env var default)
 
     Returns:
         Chroma vector store
     """
-    embedding_model = get_embedding_model()
+    embedding_model = get_embedding_model(embedding_model)
 
     # Reuse existing DB only if docs haven't changed
     if os.path.exists(persist_dir) and not _needs_rebuild(persist_dir, folder_path):
@@ -255,23 +282,30 @@ def build_vector_store(
     return vectordb
 
 
-def semantic_search(vectordb: Chroma, query: str, k: int = 3) -> List:
+def semantic_search(vectordb: Chroma, query: str, k: int = 3, search_type: str = "mmr") -> List:
     """
     Perform semantic search using Chroma.
-    
+
     Args:
         vectordb: Chroma vector database
         query: Search query
         k: Number of results to return
-    
+        search_type: "mmr" (diverse) or "similarity" (cosine, faster)
+
     Returns:
         List of relevant documents
     """
-    retriever = vectordb.as_retriever(
-        search_type="mmr",  # Maximum Marginal Relevance for diversity
-        search_kwargs={"k": k, "fetch_k": k*3}
-    )
-    
+    if search_type == "mmr":
+        retriever = vectordb.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": k * 3}
+        )
+    else:
+        retriever = vectordb.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": k}
+        )
+
     results = retriever.invoke(query)
     return results
 
@@ -303,42 +337,57 @@ def build_bm25_retriever(chunks: List, k: int = 4) -> BM25Retriever:
 # =============================================================================
 
 _cached_ensemble = None
-_cached_ensemble_k = None
+_cached_ensemble_key = None  # (k, search_type, weights_tuple)
 
 
 def hybrid_search(
     vectordb: Chroma,
     bm25_retriever: BM25Retriever,
     query: str,
-    k: int = 3
+    k: int = 3,
+    weights: list = None,
+    search_type: str = "mmr",
 ) -> List:
     """
     Perform hybrid search combining semantic (Chroma) and keyword (BM25).
-    Caches the EnsembleRetriever so it isn't rebuilt on every call.
+    Caches the EnsembleRetriever; rebuilds when k, weights, or search_type change.
 
     Args:
         vectordb: Chroma vector database
         bm25_retriever: BM25 retriever
         query: Search query
         k: Number of results to return
+        weights: [semantic_weight, bm25_weight], default [0.6, 0.4]
+        search_type: "mmr" or "similarity" for the semantic retriever
 
     Returns:
         List of relevant documents
     """
-    global _cached_ensemble, _cached_ensemble_k
+    global _cached_ensemble, _cached_ensemble_key
 
-    if _cached_ensemble is None or _cached_ensemble_k != k:
-        semantic_retriever = vectordb.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": k, "fetch_k": k*3}
-        )
+    if weights is None:
+        weights = [0.6, 0.4]
+
+    cache_key = (k, search_type, tuple(weights))
+    if _cached_ensemble is None or _cached_ensemble_key != cache_key:
+        if search_type == "mmr":
+            semantic_retriever = vectordb.as_retriever(
+                search_type="mmr",
+                search_kwargs={"k": k, "fetch_k": k * 3}
+            )
+        else:
+            semantic_retriever = vectordb.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": k}
+            )
         bm25_retriever.k = k
 
+        # EnsembleRetriever weights order: [semantic, bm25]
         _cached_ensemble = EnsembleRetriever(
             retrievers=[semantic_retriever, bm25_retriever],
-            weights=[0.6, 0.4]
+            weights=weights
         )
-        _cached_ensemble_k = k
+        _cached_ensemble_key = cache_key
 
     results = _cached_ensemble.invoke(query)
     return results[:k]
@@ -393,6 +442,9 @@ def generate_response(prompt: str, model: str = None) -> str:
         model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
     llm = get_llm(model)
     response = llm.invoke(prompt)
+    # ChatOpenAI (OpenRouter) returns an AIMessage; OllamaLLM returns a plain string
+    if hasattr(response, "content"):
+        return response.content
     return response
 
 
@@ -452,6 +504,9 @@ def answer_query(
     k: int = 4,
     history: list = None,
     sensor_data: Dict = None,
+    search_type: str = "mmr",
+    weights: list = None,
+    llm_model: str = None,
 ) -> Dict:
     """
     Complete RAG pipeline: retrieve relevant chunks, build prompt, generate answer.
@@ -465,6 +520,9 @@ def answer_query(
         k:               Number of chunks to retrieve
         history:         Recent conversation history for context
         sensor_data:     Pre-fetched sensor reading (skips DB call if provided)
+        search_type:     "mmr" or "similarity" for vector retrieval
+        weights:         [semantic_weight, bm25_weight] for hybrid mode (default [0.6, 0.4])
+        llm_model:       LLM model override (None = use env var default)
 
     Returns:
         Dictionary with answer, sources, and metadata
@@ -485,10 +543,12 @@ def answer_query(
 
     # Step 2: Retrieve relevant documents
     if use_hybrid:
-        documents = hybrid_search(vectordb, bm25_retriever, query, k=k)
+        documents = hybrid_search(
+            vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
+        )
         retrieval_method = "hybrid"
     else:
-        documents = semantic_search(vectordb, query, k=k)
+        documents = semantic_search(vectordb, query, k=k, search_type=search_type)
         retrieval_method = "semantic"
 
     # Step 3: Build prompt
@@ -506,7 +566,7 @@ def answer_query(
         prompt = history_prefix + "\n\n" + prompt
 
     # Step 4: Generate response
-    response = generate_response(prompt)
+    response = generate_response(prompt, model=llm_model)
 
     return {
         "query": query,

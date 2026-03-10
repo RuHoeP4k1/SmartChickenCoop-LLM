@@ -15,11 +15,13 @@ We built an AI assistant for chicken keepers. The AI uses a technique called RAG
 basically it looks up relevant information from our own documents before answering,
 instead of just guessing from memory.
 
-We need to prove that this approach actually gives better answers.
-To do that, we need to run an evaluation — we ask the AI 10 questions,
-score the answers, and compare RAG vs no-RAG.
+We need to prove that this approach actually gives better answers — and find the
+best configuration for it. We do this in two ways:
 
-But for the scoring to mean anything, a human has to define:
+1. **RAG vs no-RAG comparison** — does retrieving documents help?
+2. **Hyperparameter sweep** — which model size, chunk size, k, etc. gives best results?
+
+Both use the same 30 test questions. For the scoring to mean anything, a human has to define:
 - What keywords should appear in a correct answer?
 - What does a correct reference answer look like?
 - What does "actionable" mean for our users?
@@ -33,7 +35,7 @@ That is your job.
 
 ### File 1: `evaluation_data.py`
 
-This file contains 10 test questions. For each question, you fill in two things:
+This file contains 30 test questions. For each question, you fill in two things:
 
 **1. `expected_topics`**
 
@@ -82,7 +84,7 @@ come from our documents, not from ChatGPT's general knowledge.
 
 **This file is already filled in.** You do not need to edit it unless you think the criteria are wrong or could be improved.
 
-The file contains two scoring criteria used by an AI judge (Claude Haiku) to score our system's answers on a **1–3 scale** — not 1–5.
+The file contains two scoring criteria used by an AI judge (Gemini 2.0 Flash via OpenRouter free tier) to score our system's answers on a **1–3 scale**.
 
 **1. `ACTIONABILITY_CRITERIA`** — Does the answer tell the keeper what to do?
 
@@ -176,7 +178,11 @@ When you are finished, there should be:
 | `evaluate_rag.py` | Heuristic scoring utilities + standalone quick-eval | No |
 | `evaluate_ragas.py` | Runs RAGAS semantic evaluation automatically | No |
 | `evaluate_retrieval.py` | Compares two retrieval methods automatically | No |
-| `evaluate_deepeval.py` | Runs custom G-Eval scoring automatically | No |
+| `evaluate_deepeval.py` | Runs custom G-Eval scoring automatically (RAG vs no-RAG) | No |
+| `sweep_config.py` | D-Optimal design: parameter grid + design generation | No |
+| `sweep.py` | Hyperparameter sweep runner (runs all ~60 configs) | No |
+| `sweep_analysis.py` | Analyses sweep results: ANOVA, main effects, ranked table | No |
+| `SWEEP_README.md` | Full documentation of the sweep experiment + run instructions | No |
 | `results/` | Where output files are saved automatically | No |
 | `TEAMMATE_README.md` | This file | No |
 
@@ -187,18 +193,20 @@ When you are finished, there should be:
 Right now we are comparing our RAG system against our own local smollm2 model with no documents.
 That is the core comparison: does RAG help the model give better answers?
 
-There is also a question of whether we should compare against a stronger AI model
-(like GPT-4 or Claude) to show where our system sits relative to frontier models.
-That decision is pending — we need to discuss it with the supervisor first because
-it costs money and changes the scope of the evaluation.
+We are also running a **hyperparameter sweep** to find the best configuration (see `SWEEP_README.md`).
+The sweep tests 4 different LLM sizes (including larger models via OpenRouter free API),
+2 embedding models, 3 chunk sizes, 3 k values, 2 retrieval modes, and 2 search algorithms —
+~60 configurations in total, scored by the same AI judge used here.
 
-You do not need to do anything about this. Just be aware that this might come up later.
+The AI judge for both evaluations is **Gemini 2.0 Flash** (Google, via OpenRouter free tier).
+It is a different model family from all the models being tested, which avoids self-preference bias.
+No costs are incurred for the judge.
 
 ---
 
 ## Important: These Questions Do Not Use Sensor Data
 
-The 10 test questions in `evaluation_data.py` are designed to test the AI's
+The 30 test questions in `evaluation_data.py` are designed to test the AI's
 **knowledge** — things like correct temperatures, feeding advice, health signs,
 and housing guidelines. They are answered using only the knowledge base documents.
 
@@ -215,7 +223,7 @@ not here.
 
 Stick to questions that any chicken keeper might ask regardless of what the sensors
 are reading right now — general knowledge, health, nutrition, housing, behavior.
-The 10 existing questions are all good examples of this.
+The 30 existing questions are all good examples of this.
 
 ---
 

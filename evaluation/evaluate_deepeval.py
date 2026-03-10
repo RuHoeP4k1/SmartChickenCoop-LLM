@@ -3,8 +3,8 @@
 DeepEval G-Eval custom metrics: Actionability and Correctness.
 
 Compares:
-  RAG    = hybrid retrieval + Qwen LLM
-  NO-RAG = Qwen LLM with no document retrieval
+  RAG    = hybrid retrieval + Qwen/smoll LLM
+  NO-RAG = Qwen/smoll LLM with no document retrieval
 
 Criteria come from eval_config.py — a teammate must fill these in before
 the scores are meaningful.
@@ -54,7 +54,7 @@ load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
 from langchain_anthropic import ChatAnthropic
 from deepeval.models.base_model import DeepEvalBaseLLM
-from deepeval.metrics import GEval
+from deepeval.metrics import GEval, FaithfulnessMetric, AnswerRelevancyMetric
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 
 from rag_functions import (
@@ -122,7 +122,7 @@ def main():
     print(f"Judge: {JUDGE_MODEL}")
     judge = ClaudeJudge(model_name=JUDGE_MODEL)
 
-    # G-Eval metrics (criteria come from eval_config.py)
+    # Custom G-Eval metrics (1–3 scale, domain-specific criteria)
     actionability_metric = GEval(
         name="Actionability",
         criteria=ACTIONABILITY_CRITERIA,
@@ -135,6 +135,10 @@ def main():
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
     )
+
+    # Standard DeepEval RAG metrics (0–1 scale)
+    faithfulness_metric     = FaithfulnessMetric(model=judge)
+    answer_relevancy_metric = AnswerRelevancyMetric(model=judge)
 
     # -------------------------------------------------------------------------
     # RAG pipeline setup
@@ -167,72 +171,104 @@ def main():
         norag_result = get_norag_answer(question)
         norag_time = time.time() - t0
 
-        # Score RAG
-        rag_test_case = LLMTestCase(input=question, actual_output=rag_result["answer"])
+        gt      = tc.get("ground_truth", "")
+        ret_ctx = [doc.page_content for doc in rag_result["documents"]]
+
+        # Score RAG — full context: retrieval_context enables RAG-specific metrics
+        rag_test_case = LLMTestCase(
+            input=question,
+            actual_output=rag_result["answer"],
+            expected_output=gt,
+            retrieval_context=ret_ctx,
+        )
         actionability_metric.measure(rag_test_case)
         rag_action_score = actionability_metric.score
-
         correctness_metric.measure(rag_test_case)
         rag_correct_score = correctness_metric.score
+        faithfulness_metric.measure(rag_test_case)
+        rag_faith_score = faithfulness_metric.score
+        answer_relevancy_metric.measure(rag_test_case)
+        rag_rel_score = answer_relevancy_metric.score
 
-        # Score NO-RAG
-        norag_test_case = LLMTestCase(input=question, actual_output=norag_result["answer"])
+        # Score NO-RAG — no retrieval_context (no documents were retrieved)
+        norag_test_case = LLMTestCase(
+            input=question,
+            actual_output=norag_result["answer"],
+            expected_output=gt,
+            retrieval_context=[],
+        )
         actionability_metric.measure(norag_test_case)
         norag_action_score = actionability_metric.score
-
         correctness_metric.measure(norag_test_case)
         norag_correct_score = correctness_metric.score
+        faithfulness_metric.measure(norag_test_case)
+        norag_faith_score = faithfulness_metric.score
+        answer_relevancy_metric.measure(norag_test_case)
+        norag_rel_score = answer_relevancy_metric.score
 
         per_question.append({
             "question": question,
             "category": tc["category"],
             "rag": {
                 "answer": rag_result["answer"],
-                "actionability": rag_action_score,
-                "correctness": rag_correct_score,
+                "actionability":    rag_action_score,
+                "correctness":      rag_correct_score,
+                "faithfulness":     rag_faith_score,
+                "answer_relevancy": rag_rel_score,
                 "latency": round(rag_time, 3),
             },
             "norag": {
                 "answer": norag_result["answer"],
-                "actionability": norag_action_score,
-                "correctness": norag_correct_score,
+                "actionability":    norag_action_score,
+                "correctness":      norag_correct_score,
+                "faithfulness":     norag_faith_score,
+                "answer_relevancy": norag_rel_score,
                 "latency": round(norag_time, 3),
             },
         })
 
         print(
-            f"  RAG    — actionability: {rag_action_score:.2f}  correctness: {rag_correct_score:.2f}"
+            f"  RAG    — action: {rag_action_score:.2f}  correct: {rag_correct_score:.2f}"
+            f"  faithful: {rag_faith_score:.2f}  relevancy: {rag_rel_score:.2f}"
         )
         print(
-            f"  NO-RAG — actionability: {norag_action_score:.2f}  correctness: {norag_correct_score:.2f}"
+            f"  NO-RAG — action: {norag_action_score:.2f}  correct: {norag_correct_score:.2f}"
+            f"  faithful: {norag_faith_score:.2f}  relevancy: {norag_rel_score:.2f}"
         )
 
     # -------------------------------------------------------------------------
     # Compute averages
     # -------------------------------------------------------------------------
     n = len(per_question)
-    avg_rag_action = sum(r["rag"]["actionability"] for r in per_question) / n
-    avg_norag_action = sum(r["norag"]["actionability"] for r in per_question) / n
-    avg_rag_correct = sum(r["rag"]["correctness"] for r in per_question) / n
-    avg_norag_correct = sum(r["norag"]["correctness"] for r in per_question) / n
+
+    def _avg(cond, key): return sum(r[cond][key] for r in per_question) / n
+
+    avg_rag_action    = _avg("rag",   "actionability")
+    avg_norag_action  = _avg("norag", "actionability")
+    avg_rag_correct   = _avg("rag",   "correctness")
+    avg_norag_correct = _avg("norag", "correctness")
+    avg_rag_faith     = _avg("rag",   "faithfulness")
+    avg_norag_faith   = _avg("norag", "faithfulness")
+    avg_rag_rel       = _avg("rag",   "answer_relevancy")
+    avg_norag_rel     = _avg("norag", "answer_relevancy")
 
     # -------------------------------------------------------------------------
     # Print summary comparison
     # -------------------------------------------------------------------------
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 65)
     print("DEEPEVAL RESULTS — RAG vs NO-RAG")
-    print("=" * 60)
-    print(f"{'METRIC':<25}  {'RAG':>7}  {'NO-RAG':>7}  {'DIFF':>7}")
-    print("-" * 60)
-    print(
-        f"{'Actionability (avg)':<25}  {avg_rag_action:>7.4f}  "
-        f"{avg_norag_action:>7.4f}  {avg_rag_action - avg_norag_action:>+7.4f}"
-    )
-    print(
-        f"{'Correctness (avg)':<25}  {avg_rag_correct:>7.4f}  "
-        f"{avg_norag_correct:>7.4f}  {avg_rag_correct - avg_norag_correct:>+7.4f}"
-    )
-    print("=" * 60)
+    print("=" * 65)
+    print(f"{'METRIC':<28}  {'RAG':>7}  {'NO-RAG':>7}  {'DIFF':>7}")
+    print("-" * 65)
+    rows = [
+        ("Actionability (1–3)",  avg_rag_action,   avg_norag_action),
+        ("Correctness (1–3)",    avg_rag_correct,  avg_norag_correct),
+        ("Faithfulness (0–1)",   avg_rag_faith,    avg_norag_faith),
+        ("Answer Relevancy (0–1)", avg_rag_rel,    avg_norag_rel),
+    ]
+    for label, rag_val, norag_val in rows:
+        print(f"{label:<28}  {rag_val:>7.4f}  {norag_val:>7.4f}  {rag_val - norag_val:>+7.4f}")
+    print("=" * 65)
 
     # -------------------------------------------------------------------------
     # Save results
@@ -245,12 +281,16 @@ def main():
         "n_questions": n,
         "averages": {
             "rag": {
-                "actionability": avg_rag_action,
-                "correctness": avg_rag_correct,
+                "actionability":    avg_rag_action,
+                "correctness":      avg_rag_correct,
+                "faithfulness":     avg_rag_faith,
+                "answer_relevancy": avg_rag_rel,
             },
             "norag": {
-                "actionability": avg_norag_action,
-                "correctness": avg_norag_correct,
+                "actionability":    avg_norag_action,
+                "correctness":      avg_norag_correct,
+                "faithfulness":     avg_norag_faith,
+                "answer_relevancy": avg_norag_rel,
             },
         },
         "per_question": per_question,
