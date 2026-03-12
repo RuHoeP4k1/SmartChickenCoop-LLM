@@ -8,7 +8,6 @@ from pydantic.dataclasses import dataclass
 from dataclasses import dataclass
 from math import exp, log
 from typing import Iterable, List, Optional
-import matplotlib.pyplot as plt
 #=============================================================================
 # ADAPTER LAYER — translating raw data to risk inputs
 #=============================================================================
@@ -216,22 +215,6 @@ def wet_bulb_temperature_c(t_db_c: float, rh_percent: float) -> float:
         - 4.686035
     )
     return twb
-# =============================================================================
-# SAFETY RULES — general guidelines for all prompts
-# =============================================================================
-
-def wet_bulb_temperature_c(t_db_c: float, rh_percent: float) -> float:
-    rh = max(1.0, min(rh_percent, 99.0))
-    t = t_db_c
-    return (
-        t * math.atan(0.151977 * math.sqrt(rh + 8.313659))
-        + math.atan(t + rh)
-        - math.atan(rh - 1.676331)
-        + 0.00391838 * (rh ** 1.5) * math.atan(0.023101 * rh)
-        - 4.686035
-    )
-
-
 def compute_heat_risk(
     temp_db_mean: float,
     temp_db_max: float,
@@ -664,9 +647,6 @@ def mean_m(results: List[VTTStepResult]) -> float:
 # simple simulation
 #--------------------------------------------------------------------------------
 
-import math
-import matplotlib.pyplot as plt
-
 # =========================================================
 # 1. COMPLEX 1-WEEK SCENARIO MAKEN
 # =========================================================
@@ -750,116 +730,88 @@ def generate_proof_of_concept_week(params: VTTOriginalParams):
     return temperatures, rhs
 
 
-# =========================================================
-# 2. SIMULATIE UITVOEREN
-# =========================================================
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
 
-params = VTTOriginalParams(
-    sensitivity=SensitivityLevel.VERY_SENSITIVE,
-    sample_minutes=10,
-    decline_method=DeclineMethod.WOOD,
-    c_decline=1.0,
-)
+    # =========================================================
+    # 2. SIMULATIE UITVOEREN
+    # =========================================================
 
-temperatures, rhs = generate_proof_of_concept_week(params)
+    params = VTTOriginalParams(
+        sensitivity=SensitivityLevel.VERY_SENSITIVE,
+        sample_minutes=10,
+        decline_method=DeclineMethod.WOOD,
+        c_decline=1.0,
+    )
 
-results = run_vtt_original_series(
-    temperatures_c=temperatures,
-    rhs_percent=rhs,
-    params=params,
-    initial_m=0.0,
-)
+    temperatures, rhs = generate_proof_of_concept_week(params)
 
-# =========================================================
-# 3. DATA UIT RESULTS HALEN
-# =========================================================
+    results = run_vtt_original_series(
+        temperatures_c=temperatures,
+        rhs_percent=rhs,
+        params=params,
+        initial_m=0.0,
+    )
 
-time_days = [i * params.sample_minutes / (60 * 24) for i in range(len(results))]
-m_values = [r.m for r in results]
-mmax_values = [r.mmax for r in results]
-rhcrit_values = [r.rhcrit for r in results]
-growth_flags = [1 if r.favourable_for_growth else 0 for r in results]
-dmdt_values = [r.dmdt_per_24h for r in results]
+    time_days = [i * params.sample_minutes / (60 * 24) for i in range(len(results))]
+    m_values = [r.m for r in results]
+    mmax_values = [r.mmax for r in results]
+    rhcrit_values = [r.rhcrit for r in results]
+    growth_flags = [1 if r.favourable_for_growth else 0 for r in results]
+    dmdt_values = [r.dmdt_per_24h for r in results]
 
-print(f"Aantal stappen: {len(results)}")
-print(f"Eindwaarde M: {results[-1].m:.3f}")
-print(f"Gemiddelde M: {mean_m(results):.3f}")
-print(f"Maximale M: {max(m_values):.3f}")
+    print(f"Aantal stappen: {len(results)}")
+    print(f"Eindwaarde M: {results[-1].m:.3f}")
+    print(f"Gemiddelde M: {mean_m(results):.3f}")
+    print(f"Maximale M: {max(m_values):.3f}")
 
+    plt.figure(figsize=(12, 5))
+    plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
+    plt.plot(time_days, mmax_values, "--", label="Mmax", linewidth=2)
+    plt.xlabel("Tijd [dagen]")
+    plt.ylabel("Mould index")
+    plt.title("VTT proof-of-concept simulatie over 1 week")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
-# =========================================================
-# 4. PLOT 1: Mould index + Mmax
-# =========================================================
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    ax1.plot(time_days, rhs, label="RH [%]", linewidth=2)
+    ax1.plot(time_days, rhcrit_values, "--", label="RHcrit [%]", linewidth=2)
+    ax1.set_xlabel("Tijd [dagen]")
+    ax1.set_ylabel("Relatieve vochtigheid [%]")
+    ax1.grid(True)
+    ax2 = ax1.twinx()
+    ax2.plot(time_days, temperatures, label="Temperatuur [°C]", color="green", linewidth=2)
+    ax2.set_ylabel("Temperatuur [°C]")
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
+    plt.title("Omgevingscondities over 1 week")
+    plt.tight_layout()
+    plt.show()
 
-plt.figure(figsize=(12, 5))
-plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
-plt.plot(time_days, mmax_values, "--", label="Mmax", linewidth=2)
-plt.xlabel("Tijd [dagen]")
-plt.ylabel("Mould index")
-plt.title("VTT proof-of-concept simulatie over 1 week")
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
-plt.show()
+    plt.figure(figsize=(12, 4))
+    plt.plot(time_days, dmdt_values, label="dM/dt per 24h", linewidth=2)
+    plt.axhline(0.0, linestyle="--")
+    plt.xlabel("Tijd [dagen]")
+    plt.ylabel("dM/dt [per 24h]")
+    plt.title("Groei- en decline-snelheid")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
-
-# =========================================================
-# 5. PLOT 2: Temperatuur, RH en RHcrit
-# =========================================================
-
-fig, ax1 = plt.subplots(figsize=(12, 5))
-
-ax1.plot(time_days, rhs, label="RH [%]", linewidth=2)
-ax1.plot(time_days, rhcrit_values, "--", label="RHcrit [%]", linewidth=2)
-ax1.set_xlabel("Tijd [dagen]")
-ax1.set_ylabel("Relatieve vochtigheid [%]")
-ax1.grid(True)
-
-ax2 = ax1.twinx()
-ax2.plot(time_days, temperatures, label="Temperatuur [°C]", color="green", linewidth=2)
-ax2.set_ylabel("Temperatuur [°C]")
-
-lines1, labels1 = ax1.get_legend_handles_labels()
-lines2, labels2 = ax2.get_legend_handles_labels()
-ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-
-plt.title("Omgevingscondities over 1 week")
-plt.tight_layout()
-plt.show()
-
-
-# =========================================================
-# 6. PLOT 3: dM/dt
-# =========================================================
-
-plt.figure(figsize=(12, 4))
-plt.plot(time_days, dmdt_values, label="dM/dt per 24h", linewidth=2)
-plt.axhline(0.0, linestyle="--")
-plt.xlabel("Tijd [dagen]")
-plt.ylabel("dM/dt [per 24h]")
-plt.title("Groei- en decline-snelheid")
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-
-# =========================================================
-# 7. PLOT 4: Gunstige periodes inkleuren
-# =========================================================
-
-plt.figure(figsize=(12, 5))
-plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
-
-# groene achtergrond wanneer favourable_for_growth == True
-for i in range(1, len(time_days)):
-    if growth_flags[i] == 1:
-        plt.axvspan(time_days[i-1], time_days[i], alpha=0.08)
-
-plt.xlabel("Tijd [dagen]")
-plt.ylabel("Mould index")
-plt.title("Mould index met gunstige groeiperioden")
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
-plt.show()
+    plt.figure(figsize=(12, 5))
+    plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
+    for i in range(1, len(time_days)):
+        if growth_flags[i] == 1:
+            plt.axvspan(time_days[i-1], time_days[i], alpha=0.08)
+    plt.xlabel("Tijd [dagen]")
+    plt.ylabel("Mould index")
+    plt.title("Mould index met gunstige groeiperioden")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

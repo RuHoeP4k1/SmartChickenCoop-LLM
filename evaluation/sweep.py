@@ -44,6 +44,7 @@ try:
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
 from deepeval.models.base_model import DeepEvalBaseLLM
+from deepeval.metrics.g_eval.utils import Rubric
 from deepeval.metrics import (
     GEval,
     FaithfulnessMetric,
@@ -62,7 +63,7 @@ from evaluation_data import TEST_CASES
 from eval_config import ACTIONABILITY_CRITERIA, CORRECTNESS_CRITERIA
 from sweep_config import (
     build_design, config_id, chroma_dir, use_hybrid_flag,
-    save_design_md, FACTOR_KEYS,
+    save_design_md, FACTOR_KEYS, EMBED_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -209,22 +210,21 @@ _pipeline_cache: dict = {}   # key: (embed_slug, chunk_size) → (vectordb, bm25
 
 def get_pipeline(cfg: dict):
     """Return (vectordb, bm25) for the given config, building only if needed."""
-    from sweep_config import embed_slug as _slug
-    key = (_slug(cfg), cfg["chunk_size"])
+    key = ("nomic", cfg["chunk_size"])
     if key not in _pipeline_cache:
-        print(f"  [pipeline] building for embed={key[0]}, chunk={key[1]}...")
+        print(f"  [pipeline] building for embed=nomic, chunk={key[1]}...")
         docs   = load_documents(KB_PATH)
         chunks = split_documents(docs, chunk_size=cfg["chunk_size"])
         vdb    = build_vector_store(
             chunks,
             persist_dir=chroma_dir(cfg),
             folder_path=KB_PATH,
-            embedding_model=cfg["embed_model"],
+            embedding_model=EMBED_MODEL,
         )
         bm25   = build_bm25_retriever(chunks)
         _pipeline_cache[key] = (vdb, bm25)
     else:
-        print(f"  [pipeline] reusing cached embed={key[0]}, chunk={key[1]}")
+        print(f"  [pipeline] reusing cached embed=nomic, chunk={key[1]}")
     return _pipeline_cache[key]
 
 
@@ -259,7 +259,7 @@ def run_config(
             use_sensors=False,
             use_hybrid=hybrid,
             k=cfg["k"],
-            search_type=cfg["search_type"],
+            search_type="similarity",
             weights=cfg["weights"] if hybrid else None,
             llm_model=cfg["llm_model"],
         ))
@@ -289,33 +289,54 @@ def run_config(
             "question":             question,
             "category":             tc.get("category", "unknown"),
             "answer":               answer,
-            "actionability":        action_score,     # GEval 1–3
-            "correctness":          correct_score,    # GEval 1–3
-            "faithfulness":         faith_score,      # 0–1
-            "answer_relevancy":     ans_rel_score,    # 0–1
-            "contextual_precision": ctx_prec_score,   # 0–1
-            "contextual_recall":    ctx_rec_score,    # 0–1
-            "contextual_relevancy": ctx_relev_score,  # 0–1
+            "actionability":        action_score,     # 0-1 (DeepEval normalises GEval internally)
+            "correctness":          correct_score,    # 0-1
+            "faithfulness":         faith_score,      # 0-1
+            "answer_relevancy":     ans_rel_score,    # 0-1
+            "contextual_precision": ctx_prec_score,   # 0-1
+            "contextual_recall":    ctx_rec_score,    # 0-1
+            "contextual_relevancy": ctx_relev_score,  # 0-1  (-1 = judge parse error)
             "latency":              latency,
         })
 
     n = len(per_question)
 
-    def _avg(key): return sum(q[key] for q in per_question) / n
+    def _avg(key):
+        vals = [q[key] for q in per_question if isinstance(q[key], (int, float)) and q[key] >= 0]
+        if not vals:
+            return -1.0
+        return sum(vals) / len(vals)
+
+    def _fail_rate(key):
+        fails = sum(1 for q in per_question if q.get(key, 0) < 0)
+        return round(fails / n, 3) if n else 0.0
 
     avg_action  = _avg("actionability")
     avg_correct = _avg("correctness")
+    # combined: only use metrics that actually succeeded
+    combined_vals = [v for v in [avg_action, avg_correct] if v >= 0]
+    avg_combined = sum(combined_vals) / len(combined_vals) if combined_vals else -1.0
+
+    fail_rates = {m: _fail_rate(m) for m in [
+        "actionability", "correctness", "faithfulness",
+        "answer_relevancy", "contextual_precision", "contextual_recall", "contextual_relevancy",
+    ]}
+    # Warn if any metric fails on more than 20% of questions
+    for m, rate in fail_rates.items():
+        if rate > 0.2:
+            print(f"  WARNING: {m} failed on {rate*100:.0f}% of questions — results unreliable")
 
     return {
         "config": cfg,
         "avg_actionability":        round(avg_action, 4),
         "avg_correctness":          round(avg_correct, 4),
-        "avg_combined":             round((avg_action + avg_correct) / 2, 4),
+        "avg_combined":             round(avg_combined, 4),
         "avg_faithfulness":         round(_avg("faithfulness"), 4),
         "avg_answer_relevancy":     round(_avg("answer_relevancy"), 4),
         "avg_contextual_precision": round(_avg("contextual_precision"), 4),
         "avg_contextual_recall":    round(_avg("contextual_recall"), 4),
         "avg_contextual_relevancy": round(_avg("contextual_relevancy"), 4),
+        "metric_fail_rates":        fail_rates,
         "per_question": per_question,
     }
 
@@ -324,7 +345,11 @@ def _measure(metric, test_case: LLMTestCase) -> float:
     """Measure a DeepEval metric and return its score. Returns -1 on JSON parse failure."""
     try:
         metric.measure(test_case)
-        return metric.score
+        score = metric.score
+        if not (0.0 <= score <= 1.0):
+            print(f"  ⚠ {metric.__class__.__name__} returned {score} (out of 0-1 range) — treating as failure")
+            return -1.0
+        return score
     except ValueError as e:
         if "json" in str(e).lower():
             print(f"  ⚠ JSON parse error in {metric.__class__.__name__} — skipping (score=-1)")
@@ -338,36 +363,33 @@ def _measure(metric, test_case: LLMTestCase) -> float:
 
 def print_ranking_table(results: list) -> None:
     sorted_r = sorted(results, key=lambda r: r["avg_combined"], reverse=True)
-    print("\n" + "=" * 90)
+    print("\n" + "=" * 80)
     print("SWEEP RESULTS — TOP CONFIGURATIONS")
-    print("=" * 90)
-    header = (f"{'Rank':<5} {'LLM':<14} {'Embed':<10} {'Chunk':<6} {'k':<3} {'Weights':<9} "
-              f"{'Search':<10} {'Action':>7} {'Correct':>8} {'Faithful':>9} {'Combined':>9}")
+    print("=" * 80)
+    header = (f"{'Rank':<5} {'LLM':<15} {'Chunk':<6} {'k':<3} {'Weights':<10} "
+              f"{'Action':>7} {'Correct':>8} {'Faithful':>9} {'Combined':>9}")
     print(header)
-    print("-" * 100)
+    print("-" * 80)
     for rank, r in enumerate(sorted_r[:15], 1):
-        cfg = r["config"]
-        llm     = _short(cfg["llm_model"], 13)
-        embed   = "nomic" if "nomic" in cfg["embed_model"] else "openai-3s"
+        cfg     = r["config"]
+        llm     = _short(cfg["llm_model"], 14)
         chunk   = str(cfg["chunk_size"])
         k       = str(cfg["k"])
         w       = cfg["weights"]
-        weights = "50/50" if w == [0.5, 0.5] else "pure-sem"
-        search  = cfg["search_type"]
+        weights = "pure-sem" if w == [0.0, 1.0] else "70/30"
         print(
-            f"{rank:<5} {llm:<14} {embed:<10} {chunk:<6} {k:<3} {weights:<9} {search:<10} "
+            f"{rank:<5} {llm:<15} {chunk:<6} {k:<3} {weights:<10} "
             f"{r['avg_actionability']:>7.4f} {r['avg_correctness']:>8.4f} "
             f"{r.get('avg_faithfulness', 0):>9.4f} {r['avg_combined']:>9.4f}"
         )
-    print("=" * 100)
+    print("=" * 80)
 
 
 def _short(s: str, n: int) -> str:
-    if "0.5b"    in s: return "smollm2:0.5b"
-    if "1.7b"    in s: return "smollm2:1.7b"
+    if "qwen3"   in s: return "qwen3-14b"
     if "3.1-8b"  in s: return "llama-3.1-8b"
+    if "3.2-24b" in s: return "mistral-3.2-24b"
     if "3.3-70b" in s: return "llama-3.3-70b"
-    if "nemotron" in s: return "nemotron-30b"
     return s[:n]
 
 
@@ -387,21 +409,30 @@ def main():
 
     Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
 
-    # Build design — auto-calculate minimum main-effects runs if not overridden
+    # Build design
     from sweep_config import LEVELS as _LEVELS
-    if args.n_runs is None:
-        # Main effects minimum: sum(levels - 1) + 1, rounded up to nearest multiple of 3
-        min_runs = sum(l - 1 for l in _LEVELS) + 1
-        n_runs = max(min_runs + (3 - min_runs % 3) % 3, min_runs)  # round up to multiple of 3
-    else:
-        n_runs = args.n_runs
-    print(f"Generating main-effects design ({n_runs} runs)...")
+    import itertools as _it
+    full_size = 1
+    for lv in _LEVELS:
+        full_size *= lv
+    n_runs = args.n_runs  # None → full factorial
+    print(f"Generating design ({full_size} runs — full factorial)...")
     configs = build_design(n_runs=n_runs)
     save_design_md(configs, DESIGN_MD)
-    print(f"Design matrix saved → {DESIGN_MD}")
+    print(f"Design matrix saved -> {DESIGN_MD}")
 
     if args.dry_run:
         print(f"\nDry run complete. {len(configs)} configurations planned.")
+        print("\n--- Design size reference ---")
+        print(f"  Current  LEVELS={_LEVELS}: {full_size} runs  <- active")
+        _l24 = [3, 2, 2, 2]
+        _s24 = 1
+        for lv in _l24: _s24 *= lv
+        print(f"  Round 1  LEVELS={_l24}: {_s24} runs  (set in sweep_config.py)")
+        _l54 = [3, 3, 3, 2]
+        _s54 = 1
+        for lv in _l54: _s54 *= lv
+        print(f"  Extended LEVELS={_l54}: {_s54} runs  (optional, +800 chunk + k=3)")
         return
 
     # Truncate test cases for smoke testing
@@ -425,18 +456,30 @@ def main():
         judge_label = JUDGE_MODEL
     print(f"Judge: {judge_label}")
 
-    # Custom G-Eval metrics (1–3 scale, domain-specific criteria)
+    # Custom G-Eval metrics (0–10 rubric, normalized to 0–1 by DeepEval)
+    _ACTION_RUBRIC = [
+        Rubric(score_range=(0, 3), expected_outcome="Not actionable — vague generalities, nothing the user can act on, repeats the question."),
+        Rubric(score_range=(4, 6), expected_outcome="Somewhat actionable — at least one useful piece of info or step, but leaves important gaps the user must fill."),
+        Rubric(score_range=(7, 10), expected_outcome="Genuinely helpful — directly answers the question, user knows what to do next without searching further."),
+    ]
+    _CORRECT_RUBRIC = [
+        Rubric(score_range=(0, 3), expected_outcome="Incorrect or harmful — wrong facts, dangerous advice, contradicts poultry welfare practice."),
+        Rubric(score_range=(4, 6), expected_outcome="Mostly correct — core info is right but has a meaningful inaccuracy, omission, or is overly hedged."),
+        Rubric(score_range=(7, 10), expected_outcome="Correct and appropriate — accurate, safe, calibrated to question scope."),
+    ]
     actionability_metric = GEval(
         name="Actionability",
         criteria=ACTIONABILITY_CRITERIA,
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
+        rubric=_ACTION_RUBRIC,
     )
     correctness_metric = GEval(
         name="Correctness",
         criteria=CORRECTNESS_CRITERIA,
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
+        rubric=_CORRECT_RUBRIC,
     )
 
     # Standard DeepEval RAG metrics (0–1 scale)
@@ -453,8 +496,9 @@ def main():
             continue
 
         llm_label = _short(cfg["llm_model"], 20)
-        print(f"\n[{i}/{len(configs)}] llm={llm_label} embed={'nomic' if 'nomic' in cfg['embed_model'] else 'openai'} "
-              f"chunk={cfg['chunk_size']} k={cfg['k']} weights={cfg['weights']} search={cfg['search_type']}")
+        w = cfg["weights"]
+        w_label = "pure-sem" if w == [0.0, 1.0] else "70/30"
+        print(f"\n[{i}/{len(configs)}] llm={llm_label} chunk={cfg['chunk_size']} k={cfg['k']} weights={w_label}")
 
         result = run_config(
             cfg, test_cases,

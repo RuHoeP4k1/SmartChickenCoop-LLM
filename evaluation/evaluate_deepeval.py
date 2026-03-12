@@ -54,6 +54,7 @@ load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
 from langchain_anthropic import ChatAnthropic
 from deepeval.models.base_model import DeepEvalBaseLLM
+from deepeval.metrics.g_eval.utils import Rubric
 from deepeval.metrics import GEval, FaithfulnessMetric, AnswerRelevancyMetric
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 
@@ -122,18 +123,30 @@ def main():
     print(f"Judge: {JUDGE_MODEL}")
     judge = ClaudeJudge(model_name=JUDGE_MODEL)
 
-    # Custom G-Eval metrics (1–3 scale, domain-specific criteria)
+    # Custom G-Eval metrics (0–10 rubric, normalized to 0–1 by DeepEval)
+    _ACTION_RUBRIC = [
+        Rubric(score_range=(0, 3), expected_outcome="Not actionable — vague generalities, nothing the user can act on, repeats the question."),
+        Rubric(score_range=(4, 6), expected_outcome="Somewhat actionable — at least one useful piece of info or step, but leaves important gaps the user must fill."),
+        Rubric(score_range=(7, 10), expected_outcome="Genuinely helpful — directly answers the question, user knows what to do next without searching further."),
+    ]
+    _CORRECT_RUBRIC = [
+        Rubric(score_range=(0, 3), expected_outcome="Incorrect or harmful — wrong facts, dangerous advice, contradicts poultry welfare practice."),
+        Rubric(score_range=(4, 6), expected_outcome="Mostly correct — core info is right but has a meaningful inaccuracy, omission, or is overly hedged."),
+        Rubric(score_range=(7, 10), expected_outcome="Correct and appropriate — accurate, safe, calibrated to question scope."),
+    ]
     actionability_metric = GEval(
         name="Actionability",
         criteria=ACTIONABILITY_CRITERIA,
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
+        rubric=_ACTION_RUBRIC,
     )
     correctness_metric = GEval(
         name="Correctness",
         criteria=CORRECTNESS_CRITERIA,
         evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
         model=judge,
+        rubric=_CORRECT_RUBRIC,
     )
 
     # Standard DeepEval RAG metrics (0–1 scale)
@@ -261,8 +274,8 @@ def main():
     print(f"{'METRIC':<28}  {'RAG':>7}  {'NO-RAG':>7}  {'DIFF':>7}")
     print("-" * 65)
     rows = [
-        ("Actionability (1–3)",  avg_rag_action,   avg_norag_action),
-        ("Correctness (1–3)",    avg_rag_correct,  avg_norag_correct),
+        ("Actionability (0–1)",  avg_rag_action,   avg_norag_action),
+        ("Correctness (0–1)",    avg_rag_correct,  avg_norag_correct),
         ("Faithfulness (0–1)",   avg_rag_faith,    avg_norag_faith),
         ("Answer Relevancy (0–1)", avg_rag_rel,    avg_norag_rel),
     ]

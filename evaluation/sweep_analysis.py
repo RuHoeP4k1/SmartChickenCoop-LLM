@@ -71,10 +71,16 @@ def extract_results(data: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def get_score(result: dict, metric: str) -> float:
-    """Get the average score for a metric from a result dict."""
+    """Get the average score for a metric from a result dict. Returns -1 if metric failed entirely."""
     if metric == "combined":
-        return result.get("avg_combined", (result.get("avg_actionability", 0) + result.get("avg_correctness", 0)) / 2)
-    return result.get(f"avg_{metric}", 0.0)
+        v = result.get("avg_combined")
+        if v is not None:
+            return v
+        a = result.get("avg_actionability", -1)
+        c = result.get("avg_correctness", -1)
+        vals = [x for x in [a, c] if x >= 0]
+        return sum(vals) / len(vals) if vals else -1.0
+    return result.get(f"avg_{metric}", -1.0)
 
 
 def level_label(factor: str, value) -> str:
@@ -102,6 +108,8 @@ def main_effects(results: list, metric: str = "combined") -> dict:
     for r in results:
         cfg   = r["config"]
         score = get_score(r, metric)
+        if score < 0:
+            continue   # metric failed entirely for this config — exclude from effects
         for fk in FACTOR_KEYS:
             lbl = level_label(fk, cfg[fk])
             buckets[fk][lbl].append(score)
@@ -167,8 +175,10 @@ def run_anova(results: list, metric: str = "combined") -> list:
     for fk in FACTOR_KEYS:
         buckets = defaultdict(list)
         for r in results:
-            lbl   = level_label(fk, r["config"][fk])
             score = get_score(r, metric)
+            if score < 0:
+                continue
+            lbl = level_label(fk, r["config"][fk])
             buckets[lbl].append(score)
 
         groups = list(buckets.values())
@@ -213,9 +223,12 @@ def interaction_table(results: list, factor_a: str, factor_b: str, metric: str =
 
     buckets = defaultdict(list)
     for r in results:
+        score = get_score(r, metric)
+        if score < 0:
+            continue
         la = level_label(factor_a, r["config"][factor_a])
         lb = level_label(factor_b, r["config"][factor_b])
-        buckets[(la, lb)].append(get_score(r, metric))
+        buckets[(la, lb)].append(score)
 
     # Header
     col_w = 10
@@ -261,41 +274,132 @@ def print_ranked_table(results: list, top_n: int = 10) -> str:
     sorted_r = sorted(results, key=lambda r: get_score(r, "combined"), reverse=True)
 
     lines = [
-        f"\n{'='*95}",
+        f"\n{'='*80}",
         f"D. TOP {top_n} CONFIGURATIONS  (by avg combined score)",
-        f"{'='*95}",
-        f"{'Rank':<5} {'LLM':<14} {'Embed':<10} {'Chunk':<6} {'k':<3} {'Weights':<9} {'Search':<10} "
+        f"{'='*80}",
+        f"{'Rank':<5} {'LLM':<15} {'Chunk':<6} {'k':<3} {'Weights':<10} "
         f"{'Action':>8} {'Correct':>8} {'Combined':>9}",
-        "-" * 95,
+        "-" * 80,
     ]
 
     for rank, r in enumerate(sorted_r[:top_n], 1):
-        cfg = r["config"]
+        cfg     = r["config"]
         llm     = _short_llm(cfg["llm_model"])
-        embed   = "nomic" if "nomic" in cfg["embed_model"] else "openai-3s"
         chunk   = str(cfg["chunk_size"])
         k       = str(cfg["k"])
         w       = cfg["weights"]
-        weights = "50/50" if w == [0.5, 0.5] else "pure-sem"
-        search  = cfg["search_type"]
+        weights = "pure-sem" if w == [0.0, 1.0] else "70/30"
         lines.append(
-            f"{rank:<5} {llm:<14} {embed:<10} {chunk:<6} {k:<3} {weights:<9} {search:<10} "
+            f"{rank:<5} {llm:<15} {chunk:<6} {k:<3} {weights:<10} "
             f"{r['avg_actionability']:>8.4f} {r['avg_correctness']:>8.4f} {get_score(r, 'combined'):>9.4f}"
         )
 
-    lines.append("=" * 95)
+    lines.append("=" * 80)
     text = "\n".join(lines)
     print(text)
     return text
 
 
 def _short_llm(model: str) -> str:
-    if "0.5b"    in model: return "smollm2:0.5b"
     if "1.7b"    in model: return "smollm2:1.7b"
     if "3.1-8b"  in model: return "llama-3.1-8b"
+    if "3.2-24b" in model: return "mistral-3.2-24b"
     if "3.3-70b" in model: return "llama-3.3-70b"
-    if "nemotron" in model: return "nemotron-30b"
     return model[:14]
+
+
+# ---------------------------------------------------------------------------
+# CSV exports
+# ---------------------------------------------------------------------------
+
+METRICS = [
+    "actionability", "correctness", "faithfulness",
+    "answer_relevancy", "contextual_precision", "contextual_recall", "contextual_relevancy",
+]
+
+
+def export_long_csv(results: list, path: str) -> None:
+    """
+    Long-format CSV: one row per question x config.
+    Use this for mixed-model analysis in JMP/SAS (question + category as random effects).
+
+    Columns: question_id, category, llm_model, chunk_size, k, weights,
+             actionability, correctness, faithfulness, answer_relevancy,
+             contextual_precision, contextual_recall, contextual_relevancy
+    """
+    import csv
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    fieldnames = ["question_id", "category", "llm_model", "chunk_size", "k", "weights"] + METRICS + ["composite"]
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for r in results:
+            cfg = r["config"]
+            w   = cfg["weights"]
+            weights_label = "pure-sem" if w == [0.0, 1.0] else "70/30"
+
+            for qi, q in enumerate(r.get("per_question", []), 1):
+                row = {
+                    "question_id": qi,
+                    "category":    q.get("category", "unknown"),
+                    "llm_model":   _short_llm(cfg["llm_model"]),
+                    "chunk_size":  cfg["chunk_size"],
+                    "k":           cfg["k"],
+                    "weights":     weights_label,
+                }
+                scores = []
+                for m in METRICS:
+                    v = q.get(m, "")
+                    row[m] = v
+                    if isinstance(v, (int, float)) and v >= 0:
+                        scores.append(v)
+                row["composite"] = round(sum(scores) / len(scores), 4) if scores else ""
+                writer.writerow(row)
+
+    print(f"[OK] Long-format CSV saved -> {path}  (for JMP/SAS mixed models)")
+
+
+def export_averaged_csv(results: list, path: str) -> None:
+    """
+    Averaged CSV: one row per config (averages across all questions).
+    Use this for quick sanity checks and simple ANOVA.
+
+    Columns: llm_model, chunk_size, k, weights, avg_actionability, avg_correctness,
+             avg_faithfulness, avg_answer_relevancy, avg_contextual_precision,
+             avg_contextual_recall, avg_contextual_relevancy, avg_combined
+    """
+    import csv
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    avg_cols   = [f"avg_{m}" for m in METRICS] + ["avg_combined", "composite"]
+    fieldnames = ["llm_model", "chunk_size", "k", "weights"] + avg_cols
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for r in results:
+            cfg = r["config"]
+            w   = cfg["weights"]
+            weights_label = "pure-sem" if w == [0.0, 1.0] else "70/30"
+            row = {
+                "llm_model":  _short_llm(cfg["llm_model"]),
+                "chunk_size": cfg["chunk_size"],
+                "k":          cfg["k"],
+                "weights":    weights_label,
+            }
+            for col in [f"avg_{m}" for m in METRICS] + ["avg_combined"]:
+                row[col] = r.get(col, "")
+            # composite: mean of all 7 avg metrics (excluding -1 sentinels)
+            vals = [r.get(f"avg_{m}", -1) for m in METRICS]
+            valid = [v for v in vals if isinstance(v, (int, float)) and v >= 0]
+            row["composite"] = round(sum(valid) / len(valid), 4) if valid else ""
+            writer.writerow(row)
+
+    print(f"[OK] Averaged CSV saved    -> {path}  (for quick sanity checks)")
 
 
 # ---------------------------------------------------------------------------
@@ -327,11 +431,9 @@ def save_markdown_report(
         f"| Factor | Value |",
         f"|--------|-------|",
         f"| LLM | `{wcfg['llm_model']}` |",
-        f"| Embedding | `{wcfg['embed_model']}` |",
         f"| Chunk size | {wcfg['chunk_size']} |",
         f"| k | {wcfg['k']} |",
-        f"| Weights | {wcfg['weights']} |",
-        f"| Search type | {wcfg['search_type']} |",
+        f"| Weights | {'pure-sem' if wcfg['weights'] == [0.0, 1.0] else '70/30'} |",
         f"\n**Combined score:** {get_score(winner, 'combined'):.4f}  ",
         f"**Actionability:** {winner['avg_actionability']:.4f}  ",
         f"**Correctness:** {winner['avg_correctness']:.4f}\n",
@@ -392,6 +494,10 @@ def main():
 
     data    = load_results(args.input)
     results = extract_results(data)
+    # Resolve actual input path for CSV naming
+    if args.input is None:
+        _files = sorted(glob.glob(os.path.join(RESULTS_DIR, "sweep_*.json")))
+        args.input = _files[-1] if _files else "sweep"
 
     if not results:
         print("No results found.")
@@ -413,6 +519,11 @@ def main():
         effects_text, anova_text, interaction_text, ranked_text,
         args.metric,
     )
+
+    # CSV exports
+    stem = os.path.splitext(os.path.basename(args.input or "sweep"))[0]
+    export_long_csv(results,     os.path.join(RESULTS_DIR, f"{stem}_long.csv"))
+    export_averaged_csv(results, os.path.join(RESULTS_DIR, f"{stem}_averaged.csv"))
 
 
 if __name__ == "__main__":

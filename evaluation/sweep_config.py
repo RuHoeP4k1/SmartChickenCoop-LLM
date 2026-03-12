@@ -1,27 +1,38 @@
 # evaluation/sweep_config.py
 """
-D-Optimal experiment design for RAG hyperparameter sweep.
+Experiment design for RAG hyperparameter sweep.
 
-Factors (6 total):
-  A  llm_model    4 levels
-  B  embed_model  2 levels
-  C  chunk_size   3 levels
-  D  k            3 levels
-  E  weights      2 levels  (BM25:semantic ratio)
-  F  search_type  2 levels
+Factors (4 active):
+  A  llm_model    3 levels: qwen3-14b · llama-3.1-8b · mistral-small-3.2-24b
+  B  chunk_size   2 levels: 600 · 1000   (optional 3rd: 800 → 54-run full factorial)
+  C  k            2 levels: 2 · 4        (optional 3rd: 3  → 54-run full factorial)
+  D  weights      2 levels: pure-semantic · 70/30 hybrid
 
-Full factorial: 4 × 2 × 3 × 3 × 2 × 2 = 288 runs
-D-Optimal:      ~60 runs  — covers all main effects + two-way interactions
+Fixed (not factors):
+  embed_model  = nomic-embed-text-v2-moe  (cosine similarity, Chroma default)
+  search_type  = similarity               (cosine, Chroma default)
+
+Full factorial:
+  2-level chunk+k: 3 × 2 × 2 × 2 = 24 runs  ← standard Round 1
+  3-level chunk+k: 3 × 3 × 3 × 2 = 54 runs  ← optional extended sweep
 
 Usage:
     from sweep_config import build_design, FACTOR_KEYS, save_design_md
-    configs = build_design(n_runs=60)
+    configs = build_design()          # auto: full factorial
     save_design_md(configs, "evaluation/results/doe_design.md")
 """
 
 import os
 import json
+import itertools
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Fixed parameters (not swept)
+# ---------------------------------------------------------------------------
+
+EMBED_MODEL  = "nomic-embed-text-v2-moe"
+SEARCH_TYPE  = "similarity"   # cosine similarity (Chroma default)
 
 # ---------------------------------------------------------------------------
 # Parameter grid — maps integer level indices to real values
@@ -29,70 +40,101 @@ from pathlib import Path
 
 PARAM_GRID = {
     "llm_model": [
-        "smollm2:1.7b",
-        # Round 1 models (uncomment when ready):
-        # "openrouter/meta-llama/llama-3.1-8b-instruct",
-        # "openrouter/mistralai/mistral-small-3.2-24b-instruct",
+        "openrouter/qwen/qwen3-14b",
+        "openrouter/meta-llama/llama-3.1-8b-instruct",
+        "openrouter/mistralai/mistral-small-3.2-24b-instruct",
     ],
-    "embed_model": [
-        "nomic-embed-text-v2-moe",
-        # "text-embedding-3-small",  # requires OPENAI_API_KEY — enable for full sweep
+    "chunk_size": [
+        800,    # SMOKE: reuses existing chroma_db
+        # 600,
+        # 1000,
+        # ROUND 1: restore to [600, 1000] and set LEVELS[1]=2
     ],
-    "chunk_size": [800],  # smoke test: reuse existing chroma_db (800 chunks already embedded)
-    "k":          [3, 4, 5],
+    "k": [
+        3,      # SMOKE: single k level
+        # 2,
+        # 4,
+        # ROUND 1: restore to [2, 4] and set LEVELS[2]=2
+    ],
     "weights": [
-        [0.5, 0.5],   # 50% semantic, 50% BM25
-        [0.0, 1.0],   # pure semantic (use_hybrid=False in answer_query)
+        [0.0, 1.0],   # pure semantic (BM25 disabled)
+        [0.7, 0.3],   # 70% semantic / 30% BM25
     ],
-    "search_type": ["mmr", "similarity"],
 }
 
 # Factor key order must match LEVELS order below
-FACTOR_KEYS = ["llm_model", "embed_model", "chunk_size", "k", "weights", "search_type"]
-LEVELS      = [1, 1, 1, 3, 2, 2]   # smoke test: llm=1, chunk=1 (800 only), embed=1 (nomic only)
+FACTOR_KEYS = ["llm_model", "chunk_size", "k", "weights"]
+
+# ROUND 1:     LEVELS = [3, 2, 2, 2]  -> 3x2x2x2 = 24 combinations  <- active
+# ROUND 1 EXT: LEVELS = [3, 3, 3, 2]  -> 3x3x3x2 = 54 combinations  (uncomment 800+k=3 above)
+# SMOKE TEST:  LEVELS = [1, 1, 1, 2]  -> 1x1x1x2 = 2 combinations   (set chunk=[800], k=[4])
+LEVELS = [2, 1, 1, 2]   # SMOKE: 2 models × 1 chunk × 1 k × 2 weights = 4 configs
+# ROUND 1: restore to [3, 2, 2, 2] for 24-run full factorial
 
 # Human-readable short labels for the design table
 FACTOR_LABELS = {
-    "llm_model":   ["1.7b", "nemotron-30b"],
-    "embed_model": ["nomic", "openai-3s"],
-    "chunk_size":  ["400", "600", "800"],
-    "k":           ["2", "4", "6"],
-    "weights":     ["50/50", "pure-sem"],
-    "search_type": ["mmr", "similarity"],
+    "llm_model":  ["qwen3-14b", "llama-3.1-8b", "mistral-3.2-24b"],
+    "chunk_size": ["600", "800", "1000"],
+    "k":          ["2", "3", "4"],
+    "weights":    ["pure-sem", "70/30"],
 }
 
 
 # ---------------------------------------------------------------------------
-# D-Optimal design generation
+# Design generation
 # ---------------------------------------------------------------------------
 
-def build_design(n_runs: int = 18, seed: int = 42) -> list[dict]:
+def build_design(n_runs: int = None, seed: int = 42) -> list[dict]:
     """
-    Generate a main-effects screening design (LHS via pyDOE3) and decode to real parameter dicts.
+    Generate the experiment design.
 
-    18 runs covers all main effects for 6 factors (min ~12, 18 gives comfortable margin).
-    Use n_runs=60 only if estimating two-way interactions is needed.
-    Falls back to a coverage-based greedy design if pyDOE3 is not installed.
+    Strategy:
+    - If n_runs is None or >= full factorial size: run the full factorial.
+      Uses oapackage to verify D-efficiency if installed.
+    - If n_runs < full factorial size: fall back to LHS subset (pyDOE3).
+
+    For Round 1 (24 or 54 runs) this always returns the full factorial.
     """
+    import numpy as np
+
+    full_factorial_combos = list(itertools.product(*[range(lv) for lv in LEVELS]))
+    full_size = len(full_factorial_combos)
+
+    if n_runs is None or n_runs >= full_size:
+        matrix = np.array(full_factorial_combos)
+        _score_d_efficiency(matrix, full_size)
+        return _decode(matrix)
+
+    # Subset via LHS
     try:
         from pyDOE3 import lhs
-        import numpy as np
-
         np.random.seed(seed)
-        n_factors = len(FACTOR_KEYS)
-        # LHS gives uniform coverage; map continuous [0,1) samples to integer level indices
         criterion = "maximin" if n_runs > 1 else None
-        lhs_matrix = lhs(n_factors, samples=n_runs, criterion=criterion)
-        coded = np.floor(lhs_matrix * np.array(LEVELS)).astype(int)
-        # Clip to valid range in case of floating point edge
-        coded = np.clip(coded, 0, np.array(LEVELS) - 1)
-        print("[OK] D-Optimal design via Latin Hypercube Sampling (pyDOE3).")
+        lhs_matrix = lhs(len(FACTOR_KEYS), samples=n_runs, criterion=criterion)
+        coded = np.clip(
+            np.floor(lhs_matrix * np.array(LEVELS)).astype(int),
+            0, np.array(LEVELS) - 1,
+        )
+        print(f"[OK] LHS design ({n_runs} runs of {full_size} full factorial).")
         return _decode(coded)
-
     except ImportError:
-        print("⚠  pyDOE3 not found — falling back to greedy coverage design.")
+        print("⚠  pyDOE3 not found — using greedy coverage design.")
         print("   Install with: pip install pyDOE3")
         return _greedy_design(n_runs, seed)
+
+
+def _score_d_efficiency(matrix, full_size: int) -> None:
+    """Print D-efficiency score using oapackage if available, else just confirm full factorial."""
+    try:
+        import oapackage as oa
+        import numpy as np
+        # Build coded design matrix as floats for D-optimality scoring
+        arr = matrix.astype(float)
+        al = oa.array_link(arr.astype(int))
+        d_eff = al.Defficiency()
+        print(f"[OK] Full factorial ({full_size} runs) - D-efficiency: {d_eff:.4f} (oapackage).")
+    except Exception:
+        print(f"[OK] Full factorial ({full_size} runs).")
 
 
 def _decode(coded_matrix) -> list[dict]:
@@ -100,21 +142,18 @@ def _decode(coded_matrix) -> list[dict]:
     configs = []
     for row in coded_matrix:
         cfg = {key: PARAM_GRID[key][int(val)] for key, val in zip(FACTOR_KEYS, row)}
+        # Inject fixed parameters
+        cfg["embed_model"] = EMBED_MODEL
+        cfg["search_type"] = SEARCH_TYPE
         configs.append(cfg)
     return configs
 
 
 def _greedy_design(n_runs: int, seed: int = 42) -> list[dict]:
-    """
-    Coverage-based fallback: ensures every level of every factor appears at least once,
-    then fills remaining slots randomly. Not D-optimal but still reasonable.
-    """
+    """Coverage-based fallback: ensures every level appears at least once."""
     import random
-    import itertools
-
     random.seed(seed)
 
-    # Ensure full level coverage for every factor first
     base_rows = []
     for fi, key in enumerate(FACTOR_KEYS):
         for li in range(LEVELS[fi]):
@@ -122,7 +161,6 @@ def _greedy_design(n_runs: int, seed: int = 42) -> list[dict]:
             row[fi] = li
             base_rows.append(row)
 
-    # Deduplicate
     seen = set()
     unique = []
     for r in base_rows:
@@ -131,17 +169,17 @@ def _greedy_design(n_runs: int, seed: int = 42) -> list[dict]:
             seen.add(t)
             unique.append(r)
 
-    # Fill to n_runs with random rows
     all_combos = list(itertools.product(*[range(lv) for lv in LEVELS]))
     random.shuffle(all_combos)
     for combo in all_combos:
         if len(unique) >= n_runs:
             break
-        if combo not in seen:
-            seen.add(combo)
+        if tuple(combo) not in seen:
+            seen.add(tuple(combo))
             unique.append(list(combo))
 
-    return _decode(unique[:n_runs])
+    import numpy as np
+    return _decode(np.array(unique[:n_runs]))
 
 
 # ---------------------------------------------------------------------------
@@ -153,30 +191,19 @@ def config_id(cfg: dict) -> str:
     return json.dumps(cfg, sort_keys=True)
 
 
-def embed_slug(cfg: dict) -> str:
-    """Short slug for the embedding model name (used in Chroma dir names)."""
-    em = cfg["embed_model"]
-    if "nomic" in em:
-        return "nomic"
-    if "3-small" in em:
-        return "openai3s"
-    return em.replace("/", "_").replace(":", "_")[:20]
-
-
 def chroma_dir(cfg: dict, base: str = None) -> str:
     """
-    Unique persist directory for a (embed_model, chunk_size) combination.
-    Different embedding models MUST use different Chroma dirs.
-    For smoke test (nomic + chunk=800): reuses the existing production chroma_db.
+    Unique persist directory for a chunk_size.
+    Always uses nomic embedding — only chunk_size varies between dirs.
+    Reuses the production chroma_db for chunk=800 (already embedded).
     """
     root = os.path.dirname(os.path.dirname(__file__))
-    slug = embed_slug(cfg)
-    # Reuse the production chroma_db when using the already-embedded combination
-    if slug == "nomic" and cfg["chunk_size"] == 800:
+    chunk = cfg["chunk_size"]
+    if chunk == 800:
         return os.path.join(root, "chroma_db")
     if base is None:
         base = os.path.join(root, "chroma_db_sweep")
-    return os.path.join(base, f"{slug}_c{cfg['chunk_size']}")
+    return os.path.join(base, f"nomic_c{chunk}")
 
 
 def use_hybrid_flag(cfg: dict) -> bool:
@@ -193,24 +220,27 @@ def save_design_md(configs: list[dict], path: str) -> None:
     """Save the design matrix as a readable markdown table."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
+    full_size = 1
+    for lv in LEVELS:
+        full_size *= lv
+
     lines = [
-        "# D-Optimal Design Matrix\n",
+        "# Experiment Design Matrix\n",
         f"**Runs:** {len(configs)}  |  **Factors:** {len(FACTOR_KEYS)}  |  "
-        f"**Full factorial equivalent:** {_full_factorial_size()} runs\n",
+        f"**Full factorial:** {full_size} runs\n",
+        f"**Fixed:** embed=nomic  |  search=cosine-similarity\n",
         "",
-        "| Run | LLM | Embed | Chunk | k | Weights | Search |",
-        "|-----|-----|-------|-------|---|---------|--------|",
+        "| Run | LLM | Chunk | k | Weights |",
+        "|-----|-----|-------|---|---------|",
     ]
 
     for i, cfg in enumerate(configs, 1):
-        llm_label = _short_llm(cfg["llm_model"])
-        embed_label = FACTOR_LABELS["embed_model"][PARAM_GRID["embed_model"].index(cfg["embed_model"])]
-        chunk_label = str(cfg["chunk_size"])
-        k_label = str(cfg["k"])
-        w = cfg["weights"]
-        weights_label = "50/50" if w == [0.5, 0.5] else "pure-sem"
-        search_label = cfg["search_type"]
-        lines.append(f"| {i:>3} | {llm_label:<12} | {embed_label:<10} | {chunk_label} | {k_label} | {weights_label:<8} | {search_label} |")
+        llm_label    = _short_llm(cfg["llm_model"])
+        chunk_label  = str(cfg["chunk_size"])
+        k_label      = str(cfg["k"])
+        w            = cfg["weights"]
+        weights_label = "pure-sem" if w == [0.0, 1.0] else "70/30"
+        lines.append(f"| {i:>3} | {llm_label:<14} | {chunk_label} | {k_label} | {weights_label} |")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -219,9 +249,9 @@ def save_design_md(configs: list[dict], path: str) -> None:
 
 
 def _short_llm(model: str) -> str:
-    if "0.5b" in model:   return "smollm2:0.5b"
-    if "1.7b" in model:   return "smollm2:1.7b"
-    if "3.1-8b" in model: return "llama-3.1-8b"
+    if "qwen3"   in model: return "qwen3-14b"
+    if "3.1-8b"  in model: return "llama-3.1-8b"
+    if "3.2-24b" in model: return "mistral-3.2-24b"
     if "3.3-70b" in model: return "llama-3.3-70b"
     return model[:20]
 
