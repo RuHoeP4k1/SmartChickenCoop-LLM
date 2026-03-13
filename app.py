@@ -13,17 +13,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
-from rag_functions import (
+from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
     build_bm25_retriever, answer_query
 )
-from db_utils import (
+from backend.db_utils import (
     get_latest_sensor_reading, setup_database,
     get_recent_readings, get_recent_events, insert_event,
     get_sensor_history,
 )
-from sensor_filter import get_sensor_context
-from scheduler import start_scheduler, stop_scheduler
+from backend.sensor_filter import get_sensor_context
+from backend.scheduler import start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chickencareai")

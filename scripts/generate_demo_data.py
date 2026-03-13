@@ -3,10 +3,13 @@ Generate Demo Sensor Data
 Creates realistic sensor readings in PostgreSQL for testing
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime, timedelta
 import math
 import random
-from db_utils import insert_sensor_reading, setup_database
+from backend.db_utils import insert_sensor_reading, setup_database
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +284,7 @@ def show_latest_reading():
     """
     Display the most recent sensor reading.
     """
-    from db_utils import get_latest_sensor_reading
+    from backend.db_utils import get_latest_sensor_reading
     
     print("\n" + "="*70)
     print("LATEST SENSOR READING")

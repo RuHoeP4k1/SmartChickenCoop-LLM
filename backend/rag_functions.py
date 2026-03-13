@@ -23,9 +23,9 @@ from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 
-from prompts import get_prompt
-from sensor_filter import should_include_sensors, get_sensor_context, get_critical_alerts, is_environment_query
-from db_utils import get_latest_sensor_reading
+from backend.prompts import get_prompt
+from backend.sensor_filter import should_include_sensors, get_sensor_context, get_critical_alerts, is_environment_query
+from backend.db_utils import get_latest_sensor_reading
 
 
 # =============================================================================

@@ -23,8 +23,11 @@ Expected field values (you decide what's normal/warning/critical):
     waterer_status       str      "full" | "low" | "empty"
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
-from db_utils import insert_sensor_reading, get_db_connection, release_db_connection
+from backend.db_utils import insert_sensor_reading, get_db_connection, release_db_connection
 
 # You can modify this function to adjust for the format of your sensor readings.
 # Remind more functions will have to be refactored if you change the expected field names or types.

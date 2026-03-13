@@ -24,7 +24,7 @@ load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
 from langchain_ollama import OllamaLLM
 
-from rag_functions import (
+from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
     build_bm25_retriever, answer_query
 )

@@ -3,7 +3,7 @@
 Experiment design for RAG hyperparameter sweep.
 
 Factors (4 active):
-  A  llm_model    3 levels: qwen3-14b · llama-3.1-8b · mistral-small-3.2-24b
+  A  llm_model    3 levels: qwen3-8b · ministral-14b · mistral-small-3.2-24b
   B  chunk_size   2 levels: 600 · 1000   (optional 3rd: 800 → 54-run full factorial)
   C  k            2 levels: 2 · 4        (optional 3rd: 3  → 54-run full factorial)
   D  weights      2 levels: pure-semantic · 70/30 hybrid
@@ -40,22 +40,12 @@ SEARCH_TYPE  = "similarity"   # cosine similarity (Chroma default)
 
 PARAM_GRID = {
     "llm_model": [
-        "openrouter/qwen/qwen3-14b",
-        "openrouter/meta-llama/llama-3.1-8b-instruct",
+        "openrouter/qwen/qwen3-8b",
+        "openrouter/mistralai/ministral-14b-2512",
         "openrouter/mistralai/mistral-small-3.2-24b-instruct",
     ],
-    "chunk_size": [
-        800,    # SMOKE: reuses existing chroma_db
-        # 600,
-        # 1000,
-        # ROUND 1: restore to [600, 1000] and set LEVELS[1]=2
-    ],
-    "k": [
-        3,      # SMOKE: single k level
-        # 2,
-        # 4,
-        # ROUND 1: restore to [2, 4] and set LEVELS[2]=2
-    ],
+    "chunk_size": [600, 1000],
+    "k":          [2, 4],
     "weights": [
         [0.0, 1.0],   # pure semantic (BM25 disabled)
         [0.7, 0.3],   # 70% semantic / 30% BM25
@@ -68,12 +58,11 @@ FACTOR_KEYS = ["llm_model", "chunk_size", "k", "weights"]
 # ROUND 1:     LEVELS = [3, 2, 2, 2]  -> 3x2x2x2 = 24 combinations  <- active
 # ROUND 1 EXT: LEVELS = [3, 3, 3, 2]  -> 3x3x3x2 = 54 combinations  (uncomment 800+k=3 above)
 # SMOKE TEST:  LEVELS = [1, 1, 1, 2]  -> 1x1x1x2 = 2 combinations   (set chunk=[800], k=[4])
-LEVELS = [2, 1, 1, 2]   # SMOKE: 2 models × 1 chunk × 1 k × 2 weights = 4 configs
-# ROUND 1: restore to [3, 2, 2, 2] for 24-run full factorial
+LEVELS = [3, 2, 2, 2]   # ROUND 1: 3 × 2 × 2 × 2 = 24 configs
 
 # Human-readable short labels for the design table
 FACTOR_LABELS = {
-    "llm_model":  ["qwen3-14b", "llama-3.1-8b", "mistral-3.2-24b"],
+    "llm_model":  ["qwen3-8b", "ministral-14b", "mistral-small-24b"],
     "chunk_size": ["600", "800", "1000"],
     "k":          ["2", "3", "4"],
     "weights":    ["pure-sem", "70/30"],
@@ -249,10 +238,10 @@ def save_design_md(configs: list[dict], path: str) -> None:
 
 
 def _short_llm(model: str) -> str:
-    if "qwen3"   in model: return "qwen3-14b"
-    if "3.1-8b"  in model: return "llama-3.1-8b"
-    if "3.2-24b" in model: return "mistral-3.2-24b"
-    if "3.3-70b" in model: return "llama-3.3-70b"
+    if "qwen3-8b"   in model: return "qwen3-8b"
+    if "ministral"  in model: return "ministral-14b"
+    if "mistral-small" in model: return "mistral-small-24b"
+    if "3.3-70b"    in model: return "llama-3.3-70b"
     return model[:20]
 
 

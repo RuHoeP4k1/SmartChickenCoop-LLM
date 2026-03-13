@@ -20,6 +20,7 @@ Prerequisites:
 
 import os
 import sys
+import csv
 import json
 import time
 import random
@@ -45,17 +46,16 @@ except ImportError:
     _ANTHROPIC_AVAILABLE = False
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics.g_eval.utils import Rubric
+from deepeval.errors import MissingTestCaseParamsError
 from deepeval.metrics import (
     GEval,
     FaithfulnessMetric,
     AnswerRelevancyMetric,
-    ContextualPrecisionMetric,
     ContextualRecallMetric,
-    ContextualRelevancyMetric,
 )
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 
-from rag_functions import (
+from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
     build_bm25_retriever, answer_query,
 )
@@ -73,6 +73,7 @@ KB_PATH     = os.path.join(_ROOT, "test_docs")
 RESULTS_DIR = os.path.join(_HERE, "results")
 TIMESTAMP   = datetime.now().strftime("%Y%m%d_%H%M%S")
 RESULTS_FILE     = os.path.join(RESULTS_DIR, f"sweep_{TIMESTAMP}.json")
+RESULTS_CSV      = os.path.join(RESULTS_DIR, f"sweep_{TIMESTAMP}.csv")
 CHECKPOINT_FILE  = os.path.join(RESULTS_DIR, "sweep_checkpoint.json")
 DESIGN_MD        = os.path.join(RESULTS_DIR, "doe_design.md")
 
@@ -112,6 +113,7 @@ class OpenRouterJudge(DeepEvalBaseLLM):
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY"),
             temperature=0,
+            max_tokens=2048,  # covers both evaluation_steps generation and score JSON
         )
 
     def load_model(self):
@@ -239,9 +241,7 @@ def run_config(
     correctness_metric: GEval,
     faithfulness_metric,
     answer_relevancy_metric,
-    ctx_precision_metric,
     ctx_recall_metric,
-    ctx_relevancy_metric,
 ) -> dict:
     """Run all test questions for one config and return scored results."""
     vectordb, bm25 = get_pipeline(cfg)
@@ -270,6 +270,21 @@ def run_config(
         gt       = tc.get("ground_truth", "")
         ret_ctx  = [doc.page_content for doc in docs]
 
+        if not answer:
+            print(f"  ⚠ Empty answer for '{question}' (model returned only thinking tokens?) — skipping all metrics")
+            per_question.append({
+                "question":             question,
+                "category":             tc.get("category", "unknown"),
+                "answer":               "",
+                "actionability":        -1.0,
+                "correctness":          -1.0,
+                "faithfulness":         -1.0,
+                "answer_relevancy":     -1.0,
+                "contextual_recall":    -1.0,
+                "latency":              latency,
+            })
+            continue
+
         test_case = LLMTestCase(
             input=question,
             actual_output=answer,
@@ -277,13 +292,11 @@ def run_config(
             retrieval_context=ret_ctx,
         )
 
-        action_score    = call_with_backoff(lambda: _measure(actionability_metric, test_case)); time.sleep(7)
-        correct_score   = call_with_backoff(lambda: _measure(correctness_metric, test_case)); time.sleep(7)
-        faith_score     = call_with_backoff(lambda: _measure(faithfulness_metric, test_case)); time.sleep(7)
-        ans_rel_score   = call_with_backoff(lambda: _measure(answer_relevancy_metric, test_case)); time.sleep(7)
-        ctx_prec_score  = call_with_backoff(lambda: _measure(ctx_precision_metric, test_case)); time.sleep(7)
-        ctx_rec_score   = call_with_backoff(lambda: _measure(ctx_recall_metric, test_case)); time.sleep(7)
-        ctx_relev_score = call_with_backoff(lambda: _measure(ctx_relevancy_metric, test_case))
+        action_score    = call_with_backoff(lambda: _measure(actionability_metric, test_case))
+        correct_score   = call_with_backoff(lambda: _measure(correctness_metric, test_case))
+        faith_score     = call_with_backoff(lambda: _measure(faithfulness_metric, test_case))
+        ans_rel_score   = call_with_backoff(lambda: _measure(answer_relevancy_metric, test_case))
+        ctx_rec_score   = call_with_backoff(lambda: _measure(ctx_recall_metric, test_case))
 
         per_question.append({
             "question":             question,
@@ -293,9 +306,7 @@ def run_config(
             "correctness":          correct_score,    # 0-1
             "faithfulness":         faith_score,      # 0-1
             "answer_relevancy":     ans_rel_score,    # 0-1
-            "contextual_precision": ctx_prec_score,   # 0-1
             "contextual_recall":    ctx_rec_score,    # 0-1
-            "contextual_relevancy": ctx_relev_score,  # 0-1  (-1 = judge parse error)
             "latency":              latency,
         })
 
@@ -319,7 +330,7 @@ def run_config(
 
     fail_rates = {m: _fail_rate(m) for m in [
         "actionability", "correctness", "faithfulness",
-        "answer_relevancy", "contextual_precision", "contextual_recall", "contextual_relevancy",
+        "answer_relevancy", "contextual_recall",
     ]}
     # Warn if any metric fails on more than 20% of questions
     for m, rate in fail_rates.items():
@@ -333,28 +344,42 @@ def run_config(
         "avg_combined":             round(avg_combined, 4),
         "avg_faithfulness":         round(_avg("faithfulness"), 4),
         "avg_answer_relevancy":     round(_avg("answer_relevancy"), 4),
-        "avg_contextual_precision": round(_avg("contextual_precision"), 4),
         "avg_contextual_recall":    round(_avg("contextual_recall"), 4),
-        "avg_contextual_relevancy": round(_avg("contextual_relevancy"), 4),
         "metric_fail_rates":        fail_rates,
         "per_question": per_question,
     }
 
 
 def _measure(metric, test_case: LLMTestCase) -> float:
-    """Measure a DeepEval metric and return its score. Returns -1 on JSON parse failure."""
-    try:
-        metric.measure(test_case)
-        score = metric.score
-        if not (0.0 <= score <= 1.0):
-            print(f"  ⚠ {metric.__class__.__name__} returned {score} (out of 0-1 range) — treating as failure")
+    """Measure a DeepEval metric and return its score. Returns -1 on failure."""
+    for attempt in range(2):  # 1 retry on JSON/key errors
+        try:
+            metric.measure(test_case)
+            score = metric.score
+            if not (0.0 <= score <= 1.0):
+                print(f"  ⚠ {metric.__class__.__name__} returned {score} (out of 0-1 range) — treating as failure")
+                return -1.0
+            return score
+        except MissingTestCaseParamsError as e:
+            print(f"  ⚠ Empty field in {metric.__class__.__name__} — skipping (score=-1): {e}")
             return -1.0
-        return score
-    except ValueError as e:
-        if "json" in str(e).lower():
-            print(f"  ⚠ JSON parse error in {metric.__class__.__name__} — skipping (score=-1)")
+        except KeyError as e:
+            if attempt == 0:
+                print(f"  ⚠ Missing field {e} in {metric.__class__.__name__} — retrying once…")
+                time.sleep(3)
+                continue
+            print(f"  ⚠ Missing field {e} in {metric.__class__.__name__} after retry — skipping (score=-1)")
             return -1.0
-        raise
+        except ValueError as e:
+            if "json" in str(e).lower():
+                if attempt == 0:
+                    print(f"  ⚠ JSON parse error in {metric.__class__.__name__} — retrying once…")
+                    time.sleep(3)
+                    continue
+                print(f"  ⚠ JSON parse error in {metric.__class__.__name__} after retry — skipping (score=-1)")
+                return -1.0
+            raise
+    return -1.0  # unreachable but satisfies type checker
 
 
 # ---------------------------------------------------------------------------
@@ -386,10 +411,10 @@ def print_ranking_table(results: list) -> None:
 
 
 def _short(s: str, n: int) -> str:
-    if "qwen3"   in s: return "qwen3-14b"
-    if "3.1-8b"  in s: return "llama-3.1-8b"
-    if "3.2-24b" in s: return "mistral-3.2-24b"
-    if "3.3-70b" in s: return "llama-3.3-70b"
+    if "qwen3-8b"  in s: return "qwen3-8b"
+    if "ministral" in s: return "ministral-14b"
+    if "mistral-small" in s: return "mistral-small-24b"
+    if "3.3-70b"   in s: return "llama-3.3-70b"
     return s[:n]
 
 
@@ -483,11 +508,9 @@ def main():
     )
 
     # Standard DeepEval RAG metrics (0–1 scale)
-    faithfulness_metric      = FaithfulnessMetric(model=judge)
-    answer_relevancy_metric  = AnswerRelevancyMetric(model=judge)
-    ctx_precision_metric     = ContextualPrecisionMetric(model=judge)
-    ctx_recall_metric        = ContextualRecallMetric(model=judge)
-    ctx_relevancy_metric     = ContextualRelevancyMetric(model=judge)
+    faithfulness_metric      = FaithfulnessMetric(model=judge, include_reason=False)
+    answer_relevancy_metric  = AnswerRelevancyMetric(model=judge, include_reason=False)
+    ctx_recall_metric        = ContextualRecallMetric(model=judge, include_reason=False)
 
     # Run sweep
     for i, cfg in enumerate(configs, 1):
@@ -504,7 +527,7 @@ def main():
             cfg, test_cases,
             actionability_metric, correctness_metric,
             faithfulness_metric, answer_relevancy_metric,
-            ctx_precision_metric, ctx_recall_metric, ctx_relevancy_metric,
+            ctx_recall_metric,
         )
         results.append(result)
         save_checkpoint(results)
@@ -523,6 +546,38 @@ def main():
         }, f, indent=2, ensure_ascii=False)
 
     print(f"\nResults saved → {RESULTS_FILE}")
+
+    # CSV export — one row per question per config
+    csv_cols = ["q_num", "category", "llm", "chunk", "k", "weights",
+                "actionability", "correctness", "faithfulness",
+                "answer_relevancy", "contextual_recall", "latency"]
+    with open(RESULTS_CSV, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=csv_cols)
+        w.writeheader()
+        for r in results:
+            cfg = r["config"]
+            llm     = _short(cfg["llm_model"], 20)
+            chunk   = cfg["chunk_size"]
+            k       = cfg["k"]
+            weights = "pure-sem" if cfg["weights"] == [0.0, 1.0] else "70/30"
+            for q_num, pq in enumerate(r["per_question"], 1):
+                def _r(v): return round(v, 4) if isinstance(v, float) else v
+                w.writerow({
+                    "q_num":             q_num,
+                    "category":          pq.get("category", ""),
+                    "llm":               llm,
+                    "chunk":             chunk,
+                    "k":                 k,
+                    "weights":           weights,
+                    "actionability":     _r(pq["actionability"]),
+                    "correctness":       _r(pq["correctness"]),
+                    "faithfulness":      _r(pq["faithfulness"]),
+                    "answer_relevancy":  _r(pq["answer_relevancy"]),
+                    "contextual_recall": _r(pq["contextual_recall"]),
+                    "latency":           _r(pq["latency"]),
+                })
+    print(f"CSV saved      → {RESULTS_CSV}")
+
     print_ranking_table(results)
     print_token_usage(judge_label)
 

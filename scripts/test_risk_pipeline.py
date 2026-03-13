@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from pathlib import Path
 
 import matplotlib
@@ -5,14 +8,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter
 
-from db_utils import get_recent_readings
+from backend.db_utils import get_recent_readings
 
 
 def _load_risk_core_namespace() -> dict:
     """
     Load only the core risk-calculation definitions (skip demo plotting block).
     """
-    src = Path("risk_calculation.py").read_text(encoding="utf-8", errors="ignore")
+    src = (Path(__file__).parent.parent / "backend" / "risk_calculation.py").read_text(encoding="utf-8", errors="ignore")
     split_marker = "#--------------------------------------------------------------------------------\n# simple simulation"
     core = src.split(split_marker)[0]
     ns: dict = {}

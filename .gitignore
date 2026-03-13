@@ -8,8 +8,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Vector database (auto-rebuilt from test_docs/)
+# Vector databases (auto-rebuilt)
 chroma_db/
+chroma_db_sweep/
 
 # Evaluation output
 evaluation/results/
@@ -21,6 +22,9 @@ frontend/dist/
 
 # Claude Code settings (local only)
 .claude/
+
+# Sensor team code (contains hardcoded credentials)
+MONITORING/
 
 # Logs
 *.log

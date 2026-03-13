@@ -19,9 +19,9 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading
-from sensor_filter import get_sensor_context, get_critical_alerts, is_reading_stale
-from rag_functions import answer_query
+from backend.db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading
+from backend.sensor_filter import get_sensor_context, get_critical_alerts, is_reading_stale
+from backend.rag_functions import answer_query
 
 logger = logging.getLogger("chickencareai.scheduler")
 

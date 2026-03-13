@@ -36,6 +36,24 @@ _CHICKEN_TOPIC_KEYWORDS = [
     "sick", "ill", "health", "behavior", "feed", "water",
 ]
 
+# Chicken count / flock presence queries
+_FLOCK_COUNT_KEYWORDS = [
+    "how many chickens", "chickens inside", "inside the coop",
+    "how many are inside", "flock count", "head count",
+]
+
+# Egg collection queries
+_EGG_KEYWORDS = [
+    "how many eggs", "egg count", "eggs today", "eggs laid",
+    "collected eggs", "egg production",
+]
+
+# Door / ventilation status queries
+_COOP_STATUS_KEYWORDS = [
+    "is the door", "door open", "door closed", "is it open",
+    "ventilation", "fan on", "is it ventilated", "air in the coop",
+]
+
 
 # =============================================================================
 # Staleness check
@@ -120,6 +138,14 @@ def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
     if has_critical and any(kw in query_lower for kw in _CHICKEN_TOPIC_KEYWORDS):
         return True
 
+    # Rule 5: Flock count / egg / door / ventilation question → include (we have that data)
+    if any(kw in query_lower for kw in _FLOCK_COUNT_KEYWORDS):
+        return True
+    if any(kw in query_lower for kw in _EGG_KEYWORDS):
+        return True
+    if any(kw in query_lower for kw in _COOP_STATUS_KEYWORDS):
+        return True
+
     return False
 
 
@@ -191,6 +217,20 @@ def get_sensor_context(sensor_data: Dict) -> str:
     # Door — only notable when open
     if sensor_data.get("door_open"):
         alerts.append("Coop door: open")
+
+    # Chickens inside — always include (useful operational context)
+    chickens = sensor_data.get("chickens_inside")
+    if chickens is not None:
+        alerts.append(f"Chickens inside coop: {chickens}")
+
+    # Egg count — include when eggs have been laid
+    eggs = sensor_data.get("egg_count")
+    if eggs is not None and eggs > 0:
+        alerts.append(f"Eggs detected: {eggs}")
+
+    # Ventilation — include when on (relevant for temp/H2S alerts)
+    if sensor_data.get("ventilation_on"):
+        alerts.append("Ventilation: on")
 
     if alerts:
         return "Current coop readings:\n" + "\n".join(f"- {a}" for a in alerts)

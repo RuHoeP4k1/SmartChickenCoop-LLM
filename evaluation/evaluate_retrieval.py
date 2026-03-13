@@ -60,7 +60,7 @@ from ragas import evaluate, EvaluationDataset, SingleTurnSample
 from ragas.metrics import ContextPrecision
 from ragas.run_config import RunConfig
 
-from rag_functions import (
+from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
     build_bm25_retriever, answer_query,
 )
