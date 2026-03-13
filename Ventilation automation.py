@@ -38,9 +38,8 @@ Units
 import math
 
 
-# ===========================================================================
 # Physics helpers
-# ===========================================================================
+
 
 def absolute_humidity(T, RH):
     """
@@ -103,12 +102,8 @@ def co2_production_per_bird(W, T, RQ=0.9):
     return (HP_kcal * RQ) / (3.815 + 1.232 * RQ)
 
 
-# ===========================================================================
-# Sensor validation
-# ===========================================================================
 
-# Default plausibility ranges — override by passing custom ranges to
-# validate_sensors() if your setup differs.
+# Sensor validation
 SENSOR_RANGES = {
     "T_in":   (-15.0,  50.0),
     "CO2_in": (300.0, 5000.0),
@@ -118,8 +113,8 @@ SENSOR_RANGES = {
     "H2S_in": (0.0,   100.0),
 }
 
-def validate_sensors(T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in, 
-                     ranges=None): 
+def validate_sensors(T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in,
+                     ranges=None):
     """
     Check each sensor channel against plausibility bounds.
 
@@ -143,9 +138,8 @@ def validate_sensors(T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in,
     return faults, valid
 
 
-# ===========================================================================
 # Direct inversion functions
-# ===========================================================================
+
 
 def co2_seed_rate(n_birds, q_co2_Lday, CO2_target, CO2_ambient):
     """
@@ -226,27 +220,8 @@ def temperature_inversion_rate(n_birds, q_sensible, T_target, T_amb):
     return (Q / (rho * cp * delta_T)) * 3600   # m3/s -> m3/h
 
 
-def mold_rh_critical(T_in, rh_above_20=0.70):
-    """
-    Critical RH fraction for mold growth favourability.
-    Based on the corrected VTT RHcrit curve:
-      RHcrit = -0.00267*T^3 + 0.160*T^2 - 3.13*T + 100   (T <= 20 C)
-      RHcrit = rh_above_20 * 100                         (T > 20 C)
-    """
-    if T_in <= 20.0:
-        rhcrit_pct = -0.00267 * (T_in ** 3) + 0.160 * (T_in ** 2) - 3.13 * T_in + 100.0
-        return max(0.05, min(rhcrit_pct / 100.0, 1.0))
-    return max(0.05, min(rh_above_20, 1.0))
-
-
-def mold_growth_favourable(T_in, RH_in, rh_above_20=0.70):
-    """True when current T/RH conditions are favourable for mold growth."""
-    return RH_in >= mold_rh_critical(T_in, rh_above_20=rh_above_20)
-
-
-# ===========================================================================
 # Main control function
-# ===========================================================================
+
 
 def compute_ventilation_rate(
     # ── Sensor inputs ──────────────────────────────────────────────────
@@ -261,11 +236,9 @@ def compute_ventilation_rate(
     prev_valid,         # dict — last known good sensor values
     initialised,        # bool — False on very first call
     # ── Hardware limits ────────────────────────────────────────────────
-    vent_min=50.0,      # m3/h
-    vent_max=36000.0,   # m3/h
+    vent_min=20.0,      # m3/h
+    vent_max=150,   # m3/h
     max_slew=3000.0,    # m3/h per cycle
-    mold_target_rh=0.70,    # RH target when mitigating mold growth conditions
-    mold_rh_above_20=0.70,  # RHcrit for T > 20 C
 ):
     """
     Compute the ventilation rate for one control cycle.
@@ -338,8 +311,6 @@ def compute_ventilation_rate(
     AH_in      = absolute_humidity(T_in,  RH_in)
     AH_out     = absolute_humidity(T_amb, RH_amb)
     AH_tgt_max = absolute_humidity(T_in,  RH_max)   # AH ceiling at current T_in
-    mold_target_rh = max(0.05, min(mold_target_rh, 1.0))
-    AH_tgt_mold = absolute_humidity(T_in, mold_target_rh)
 
     # ── PRIORITY 1: Gas — CO2 and H2S ────────────────────────────────
 
@@ -348,10 +319,8 @@ def compute_ventilation_rate(
         rate = vent_max
         state = dict(prev_rate=rate, prev_valid=new_prev_valid, initialised=True)
         diag  = dict(limiting="H2S emergency", h2s_alert="emergency",
-                     vr_co2=rate, vr_moisture=0, vr_temp=0, vr_mold=0,
-                     rh_impossible=False, mold_impossible=False, mold_favourable=False,
-                     mold_rhcrit=mold_rh_critical(T_in, rh_above_20=mold_rh_above_20),
-                     cold_start=cold_start,
+                     vr_co2=rate, vr_moisture=0, vr_temp=0,
+                     rh_impossible=False, cold_start=cold_start,
                      sensor_faults=faults, notes=notes+["H2S EMERGENCY — fan at maximum"])
         return rate, state, diag
 
@@ -404,25 +373,6 @@ def compute_ventilation_rate(
         notes.append(f"Cold stress: T_in={T_in:.1f}C < T_min={T_min:.1f}C — fan at gas-safety floor")
 
     # ── Slew rate limit ────────────────────────────────────────────────
-    # Priority 5: Mold risk (strictly last priority)
-    # Only applied when priorities 1-4 are not already demanding a stronger action.
-    vr_mold = 0.0
-    mold_impossible = False
-    mold_rhcrit = mold_rh_critical(T_in, rh_above_20=mold_rh_above_20)
-    mold_favourable = mold_growth_favourable(T_in, RH_in, rh_above_20=mold_rh_above_20)
-    if mold_favourable and T_in >= T_min and limiting == "CO2/H2S":
-        vr_mold, mold_impossible = moisture_inversion_rate(prev_rate, AH_in, AH_tgt_mold, AH_out)
-        if mold_impossible:
-            notes.append("Mold-risk mitigation unavailable: outdoor air too moist")
-            vr_mold = 0.0
-        else:
-            vr_mold = max(vr_mold, vent_min)
-            target = max(target, vr_mold)
-            limiting = "Mold risk"
-            notes.append(
-                f"Mold-favourable conditions: RH_in={RH_in:.2f} >= RHcrit={mold_rhcrit:.2f} â€” ventilating"
-            )
-
     delta  = max(-max_slew, min(target - prev_rate, max_slew))
     rate   = max(vent_min, min(prev_rate + delta, vent_max))
 
@@ -438,11 +388,7 @@ def compute_ventilation_rate(
         vr_co2        = vr_co2,
         vr_moisture   = vr_moisture,
         vr_temp       = vr_temp,
-        vr_mold       = vr_mold,
         rh_impossible = rh_impossible,
-        mold_impossible = mold_impossible,
-        mold_favourable = mold_favourable,
-        mold_rhcrit   = mold_rhcrit,
         cold_start    = cold_start,
         sensor_faults = faults,
         notes         = notes,
@@ -450,9 +396,8 @@ def compute_ventilation_rate(
     return rate, state, diag
 
 
-# ===========================================================================
+
 # Demo
-# ===========================================================================
 
 if __name__ == "__main__":
 
