@@ -151,7 +151,7 @@ def clean_text(text: str) -> str:
     return text
 
 
-def split_documents(documents: List, chunk_size: int = 800, chunk_overlap: int = 120) -> List:
+def split_documents(documents: List, chunk_size: int = 1000, chunk_overlap: int = 120) -> List:
     """
     Split documents into smaller chunks for embedding.
     
@@ -397,11 +397,11 @@ def hybrid_search(
 # LLM RESPONSE GENERATION
 # =============================================================================
 
-def format_context(documents: List, max_chars: int = 3000) -> str:
+def format_context(documents: List, max_chars: int = 8000) -> str:
     """
     Format retrieved documents into a context string for the LLM.
     Stops adding chunks once max_chars is reached to protect token budget.
-    At ~4 chars per token, 3000 chars ≈ 750 tokens — keeps input short for small LLMs.
+    At ~4 chars per token, 8000 chars ≈ 2000 tokens — sufficient for OpenRouter models.
 
     Args:
         documents: List of retrieved documents
@@ -595,7 +595,7 @@ if __name__ == "__main__":
     
     # Load and prepare knowledge base
     docs = load_documents("test_docs")
-    chunks = split_documents(docs, chunk_size=800)
+    chunks = split_documents(docs, chunk_size=1000)
     
     # Build retrievers
     vectordb = build_vector_store(chunks)

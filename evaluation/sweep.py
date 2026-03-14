@@ -47,6 +47,7 @@ except ImportError:
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics.g_eval.utils import Rubric
 from deepeval.errors import MissingTestCaseParamsError
+from pydantic import ValidationError
 from deepeval.metrics import (
     GEval,
     FaithfulnessMetric,
@@ -363,15 +364,15 @@ def _measure(metric, test_case: LLMTestCase) -> float:
         except MissingTestCaseParamsError as e:
             print(f"  ⚠ Empty field in {metric.__class__.__name__} — skipping (score=-1): {e}")
             return -1.0
-        except KeyError as e:
+        except (KeyError, ValidationError) as e:
             if attempt == 0:
-                print(f"  ⚠ Missing field {e} in {metric.__class__.__name__} — retrying once…")
+                print(f"  ⚠ Malformed judge output in {metric.__class__.__name__} — retrying once…")
                 time.sleep(3)
                 continue
-            print(f"  ⚠ Missing field {e} in {metric.__class__.__name__} after retry — skipping (score=-1)")
+            print(f"  ⚠ Malformed judge output in {metric.__class__.__name__} after retry — skipping (score=-1)")
             return -1.0
-        except ValueError as e:
-            if "json" in str(e).lower():
+        except (ValueError, json.JSONDecodeError) as e:
+            if "json" in str(e).lower() or isinstance(e, json.JSONDecodeError):
                 if attempt == 0:
                     print(f"  ⚠ JSON parse error in {metric.__class__.__name__} — retrying once…")
                     time.sleep(3)

@@ -73,14 +73,22 @@ def check_sensors():
         _last_alert_type = None
         return
 
-    # Build a dedup key from sorted alert types
-    alert_key = "|".join(sorted(critical_alerts))
+    # Build a dedup key from which sensors are critical — NOT from their values.
+    # Using values (e.g. "36.2°C") caused a new alert every tick as readings drifted.
+    _CRITICAL_FIELDS = [
+        "temperature_status", "humidity_status", "heat_stress_index",
+        "h2s_level", "mold_risk_status",
+    ]
+    _EMPTY_FIELDS = ["feeder_status", "waterer_status"]
+    active = (
+        [f for f in _CRITICAL_FIELDS if reading.get(f) == "critical"] +
+        [f for f in _EMPTY_FIELDS   if reading.get(f) == "empty"]
+    )
+    alert_key = "|".join(sorted(active))
 
     if alert_key == _last_alert_type:
         # Same alerts as last cycle — don't spam
         return
-
-    _last_alert_type = alert_key
 
     # Determine severity
     temp_critical = reading.get("temperature_status") == "critical"
@@ -91,6 +99,8 @@ def check_sensors():
 
     sensor_context = get_sensor_context(reading)
     logger.warning(f"Scheduler alert [{severity}]: {'; '.join(critical_alerts)}")
+
+    inserted = False
 
     # Run RAG to generate actionable advice
     if _vectordb is not None and _bm25_retriever is not None:
@@ -115,17 +125,30 @@ def check_sensors():
                 sensor_context_filtered=result["sensor_context"],
                 sources=result.get("sources"),
             )
-            return
+            inserted = True
         except Exception as e:
             logger.error(f"Scheduler: RAG pipeline failed: {e}")
 
     # Fallback: log without RAG advice (RAG not ready or failed)
-    insert_event(
-        event_type="sensor_alert",
-        severity=severity,
-        sensor_snapshot=reading,
-        sensor_context_filtered=sensor_context,
-    )
+    if not inserted:
+        try:
+            insert_event(
+                event_type="sensor_alert",
+                severity=severity,
+                sensor_snapshot=reading,
+                sensor_context_filtered=sensor_context,
+            )
+            inserted = True
+        except Exception as e:
+            logger.error(f"Scheduler: fallback event insert failed: {e}")
+
+    # Only update dedup key after a successful insert.
+    # If we set it before inserting and the insert fails, future alerts for the
+    # same condition are silently suppressed until conditions normalize.
+    if inserted:
+        _last_alert_type = alert_key
+    else:
+        logger.error("Scheduler: alert could not be logged to event_log — check DB connection and that setup_database() succeeded")
 
 
 # ---------------------------------------------------------------------------

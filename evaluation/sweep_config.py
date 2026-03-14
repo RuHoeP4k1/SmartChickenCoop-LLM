@@ -63,8 +63,8 @@ LEVELS = [3, 2, 2, 2]   # ROUND 1: 3 × 2 × 2 × 2 = 24 configs
 # Human-readable short labels for the design table
 FACTOR_LABELS = {
     "llm_model":  ["qwen3-8b", "ministral-14b", "mistral-small-24b"],
-    "chunk_size": ["600", "800", "1000"],
-    "k":          ["2", "3", "4"],
+    "chunk_size": ["600", "1000"],
+    "k":          ["2", "4"],
     "weights":    ["pure-sem", "70/30"],
 }
 
