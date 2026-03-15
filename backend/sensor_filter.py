@@ -228,6 +228,11 @@ def get_sensor_context(sensor_data: Dict) -> str:
     if eggs is not None and eggs > 0:
         alerts.append(f"Eggs detected: {eggs}")
 
+    # Crowding assessment — always include when available
+    crowding = sensor_data.get("crowding_assesment")
+    if crowding is not None:
+        alerts.append(f"Crowding assessment: {crowding}")
+
     # Ventilation — include when on (relevant for temp/H2S alerts)
     if sensor_data.get("ventilation_on"):
         alerts.append("Ventilation: on")
