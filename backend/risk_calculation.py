@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from pydantic.dataclasses import dataclass
 from dataclasses import dataclass
@@ -45,12 +45,84 @@ def _sort_readings_newest_first(readings: List[Dict[str, Any]]) -> List[Dict[str
 
     return sorted(readings, key=sort_key, reverse=True)
 
+
+def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
+    """Compute THI from dry-bulb temperature and relative humidity."""
+    twb = wet_bulb_temperature_c(temp_c, humidity_pct)
+    return 0.85 * temp_c + 0.15 * twb
+
+
+def _build_thi_series(readings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return valid THI points sorted newest first."""
+    thi_series: List[Dict[str, Any]] = []
+    for row in _sort_readings_newest_first(readings):
+        timestamp = _parse_timestamp(row.get("timestamp"))
+        temperature_c = row.get("temperature_c")
+        humidity_pct = row.get("humidity_pct")
+        if timestamp is None or temperature_c is None or humidity_pct is None:
+            continue
+
+        thi_series.append(
+            {
+                "timestamp": timestamp,
+                "thi": _calculate_thi(float(temperature_c), float(humidity_pct)),
+                "row": row,
+            }
+        )
+    return thi_series
+
+
+def calculate_thi_slope_from_readings(
+    readings: List[Dict[str, Any]],
+    interval_minutes: float = 60.0,
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Calculate the THI slope in THI-points/hour over a configurable interval.
+
+    Uses the newest valid reading as the anchor and compares it with the oldest
+    valid reading inside the requested interval. If an exact boundary point does
+    not exist, the closest older point is used. The second return value is the
+    actual timespan in minutes used for the slope calculation.
+    """
+    if interval_minutes <= 0:
+        raise ValueError("interval_minutes must be > 0")
+
+    thi_series = _build_thi_series(readings)
+    if len(thi_series) < 2:
+        return None, None
+
+    latest_point = thi_series[0]
+    cutoff = latest_point["timestamp"] - timedelta(minutes=interval_minutes)
+
+    comparison_point: Optional[Dict[str, Any]] = None
+    for point in thi_series[1:]:
+        comparison_point = point
+        if point["timestamp"] <= cutoff:
+            break
+
+    if comparison_point is None:
+        return None, None
+
+    delta_hours = (
+        latest_point["timestamp"] - comparison_point["timestamp"]
+    ).total_seconds() / 3600.0
+    if delta_hours <= 0:
+        return None, None
+
+    slope_per_hour = (latest_point["thi"] - comparison_point["thi"]) / delta_hours
+    return slope_per_hour, delta_hours * 60.0
+
 def build_heat_risk_inputs_from_recent_readings(
     recent_readings: List[Dict[str, Any]],
+    slope_interval_minutes: float = 60.0,
 ) -> Dict[str, Any]:
     """
     Derive every `compute_heat_risk` input from rows returned by
     `db_utils.get_recent_readings()`.
+
+    `slope_interval_minutes` controls the THI trend window. For example:
+    - `10` compares the latest THI with roughly 10 minutes ago
+    - `60` compares the latest THI with roughly 60 minutes ago
     """
     if not recent_readings:
         raise ValueError("recent_readings is empty")
@@ -66,24 +138,6 @@ def build_heat_risk_inputs_from_recent_readings(
         raise ValueError("No temperature values found in recent_readings")
     if not rhs:
         raise ValueError("No humidity values found in recent_readings")
-
-    thi_series: List[Dict[str, Any]] = []
-    for row in window:
-        t = row.get("temperature_c")
-        rh = row.get("humidity_pct")
-        if t is None or rh is None:
-            continue
-        t = float(t)
-        rh = float(rh)
-        twb = wet_bulb_temperature_c(t, rh)
-        thi = 0.85 * t + 0.15 * twb
-        thi_series.append(
-            {
-                "timestamp": _parse_timestamp(row.get("timestamp")),
-                "thi": thi,
-                "row": row,
-            }
-        )
 
     latest = window[0]
     feeder_status = str(latest.get("feeder_status", "")).lower()
@@ -118,8 +172,7 @@ def build_heat_risk_inputs_from_recent_readings(
 
         t_val = float(t)
         rh_val = float(rh)
-        twb = wet_bulb_temperature_c(t_val, rh_val)
-        thi = 0.85 * t_val + 0.15 * twb
+        thi = _calculate_thi(t_val, rh_val)
         if thi >= high_thi_threshold:
             count_consecutive_high += 1
         else:
@@ -127,15 +180,10 @@ def build_heat_risk_inputs_from_recent_readings(
 
     high_thi_streak_minutes = int(count_consecutive_high * sampling_interval)
 
-    thi_slope_per_hour: Optional[float] = None
-    thi_with_ts = [p for p in thi_series if p["timestamp"] is not None]
-    if len(thi_with_ts) >= 2:
-        thi_with_ts.sort(key=lambda x: x["timestamp"])
-        first = thi_with_ts[0]
-        last = thi_with_ts[-1]
-        delta_hours = (last["timestamp"] - first["timestamp"]).total_seconds() / 3600.0
-        if delta_hours > 0:
-            thi_slope_per_hour = (last["thi"] - first["thi"]) / delta_hours
+    thi_slope_per_hour, thi_slope_window_minutes = calculate_thi_slope_from_readings(
+        readings_sorted,
+        interval_minutes=slope_interval_minutes,
+    )
 
     expected_points = 6
     valid_points = sum(
@@ -153,6 +201,7 @@ def build_heat_risk_inputs_from_recent_readings(
         "feed_intake": feed_intake,
         "water_intake": water_intake,
         "thi_slope_per_hour": thi_slope_per_hour,
+        "thi_slope_window_minutes": thi_slope_window_minutes,
         "data_coverage_last_hour": data_coverage_last_hour,
         "sensor_count_temp": 1,
     }
@@ -228,10 +277,10 @@ def compute_heat_risk(
     contributing_factors: List[str] = []
 
     twb_mean = wet_bulb_temperature_c(temp_db_mean, rh_percent_mean)
-    thi_mean = 0.85 * temp_db_mean + 0.15 * twb_mean
+    thi_mean = _calculate_thi(temp_db_mean, rh_percent_mean)
 
     twb_max = wet_bulb_temperature_c(temp_db_max, rh_percent_mean)
-    thi_max = 0.85 * temp_db_max + 0.15 * twb_max
+    thi_max = _calculate_thi(temp_db_max, rh_percent_mean)
 
     # --- Base risk from THI (make high end steeper)
     if thi_mean < 19:
@@ -256,22 +305,17 @@ def compute_heat_risk(
         score = 1.0
         contributing_factors.append("THI extreme")
 
-    # --- Peak risk (hotspots)
-    if thi_max >= 33:
-        score += 0.1
-        contributing_factors.append("Critical peak conditions (hotspot)")
-
-    # --- Prolonged exposure
+    # --- Prolonged exposure - if animals are already exposed to high THI for a long time, risk is higher and more urgent to act
     if high_thi_streak_minutes >= 30:
         score += 0.1
         contributing_factors.append("Sustained exposure (≥30 min)")
 
-    # --- Resource tracking signals
+    # --- Resource tracking signals - vooral belangrijk om mee te geven aan RAG, zonder dat het de score sterk beinvloedt
     if feed_intake in {"Reduced", "Low"}:
-        score += 0.1
+        score += 0.05
         contributing_factors.append("Reduced feed intake")
     if water_intake in {"Increased", "High"}:
-        score += 0.1
+        score += 0.05
         contributing_factors.append("Increased water uptake")
 
     # --- Trend-based early warning (optional)
@@ -283,88 +327,21 @@ def compute_heat_risk(
 
     # --- Risk level thresholds (keep simple)
     if score < 0.5:
-        level = "LOW"
+        level = "LOW - Monitor"
     elif score < 0.75:
-        level = "MEDIUM"
+        level = "MEDIUM - Elevated risk - Prepare to act"
     else:
-        level = "HIGH"
+        level = "HIGH - Take action now"
 
-    # --- Horizon (urgency)
-    # Interpreting as: time before conditions likely become harmful if nothing changes
-    time_horizon = 240
-    if thi_mean >= 33:
-        time_horizon = 10
-    elif thi_mean >= 31:
-        time_horizon = 30
-    elif thi_mean >= 29:
-        time_horizon = 60
-    elif thi_mean >= 25:
-        time_horizon = 120
-
-    # If already sustained, shorten horizon ==> more urgent to act because animals are already stressed
-    if high_thi_streak_minutes >= 60:
-        time_horizon = min(time_horizon, 30)
-
-    # If THI rising fast, shorten horizon ==> early warning that conditions may deteriorate quickly
-    if thi_slope_per_hour is not None and thi_slope_per_hour >= 2.0:
-        time_horizon = max(10, time_horizon // 2)
 
     return {
         "event_type": "HEAT_RISK",
         "risk_score": round(score * 100, 1),
         "risk_level": level,
-        "time_horizon_minutes": int(time_horizon),
         "contributing_factors": contributing_factors,
         "thi_mean": round(thi_mean, 2),
         "thi_max": round(thi_max, 2),
     }
-
-def decide_ventilation_action(
-    risk: Dict[str, Any],
-    current_fan_percent: int,
-    min_fan_percent: int = 15,
-    max_fan_percent: int = 100,
-) -> Dict[str, Any]:
-    """Zet risk-output om naar een concrete ventilatie-actie.
-
-    Geeft een payload terug die je rechtstreeks kan loggen, publishen naar MQTT,
-    of doorgeven aan je RAG-laag voor uitleg aan de gebruiker.
-    """
-
-    risk_level = risk["risk_level"]
-    risk_score = float(risk["risk_score"])
-    time_horizon = int(risk["time_horizon_minutes"])
-
-    if risk_level == "LOW":
-        target_fan = max(min_fan_percent, 20)
-        action = "MAINTAIN"
-    elif risk_level == "MEDIUM":
-        target_fan = max(min_fan_percent, 45)
-        action = "INCREASE"
-    else:  # HIGH
-        if risk_score >= 0.9 or time_horizon <= 10:
-            target_fan = max_fan_percent
-            action = "EMERGENCY_MAX"
-        else:
-            target_fan = min(max_fan_percent, 75)
-            action = "INCREASE_STRONGLY"
-
-    delta = target_fan - current_fan_percent
-
-    return {
-        "controller": "VENTILATION",
-        "action": action,
-        "current_fan_percent": current_fan_percent,
-        "target_fan_percent": target_fan,
-        "delta_percent": delta,
-        "reason": {
-            "risk_level": risk_level,
-            "risk_score": risk_score,
-            "time_horizon_minutes": time_horizon,
-            "contributing_factors": risk["contributing_factors"],
-        },
-    }
-
 
 def build_rag_context(risk: Dict[str, Any], ventilation_action: Dict[str, Any]) -> Dict[str, Any]:
     """Combineer detectie + actuatorbeslissing voor downstream RAG-advies."""
@@ -384,7 +361,9 @@ def build_rag_context(risk: Dict[str, Any], ventilation_action: Dict[str, Any]) 
 
 
 
-
+#=============================================================================
+# VTT MOLD GROWTH MODEL IMPLEMENTATION
+#=============================================================================
 
 
 class SensitivityLevel(str, Enum):
@@ -643,12 +622,8 @@ def mean_m(results: List[VTTStepResult]) -> float:
         return 0.0
     return sum(r.m for r in results) / len(results)
 
-#--------------------------------------------------------------------------------
-# simple simulation
-#--------------------------------------------------------------------------------
-
 # =========================================================
-# 1. COMPLEX 1-WEEK SCENARIO MAKEN
+# 1. SIMULATIE EN VISUALISATIE VAN EEN COMPLEX 1-WEEK SCENARIO
 # =========================================================
 
 def generate_proof_of_concept_week(params: VTTOriginalParams):
