@@ -25,6 +25,13 @@ _CURRENT_SITUATION_KEYWORDS = [
     "panting", "lethargic", "not moving", "breathing heavy", "wings spread",
     "what are the readings", "check the coop", "how is the coop",
     "how are my", "is my",
+    # Mortality / distress
+    "found dead", "dead chicken", "dead hen", "dying",
+    # Compound negation patterns
+    "not eating", "stopped eating", "won't eat",
+    "won't drink", "stopped drinking", "not drinking",
+    # General concern
+    "acting weird", "acting strange", "something wrong", "what's wrong with",
 ]
 
 # Resource-related keywords — used in combination with low/empty status
@@ -52,6 +59,27 @@ _EGG_KEYWORDS = [
 _COOP_STATUS_KEYWORDS = [
     "is the door", "door open", "door closed", "is it open",
     "ventilation", "fan on", "is it ventilated", "air in the coop",
+]
+
+# Behavioral / symptom keywords — these almost always warrant sensor context
+_BEHAVIOR_KEYWORDS = [
+    "molting", "moulting", "losing feathers", "feather loss", "bald spots",
+    "broody", "sitting on eggs", "won't leave nest",
+    "aggressive", "bullying", "pecking each other", "fighting",
+    "limping", "can't walk", "not walking",
+    "ruffled feathers", "puffed up", "fluffed up",
+    "diarrhea", "runny droppings", "watery droppings",
+    "coughing", "sneezing", "wheezing", "gasping", "rattling",
+    "listless", "not active", "huddling",
+    "pale comb", "blue comb", "swollen eyes", "discharge",
+    "worms", "mites", "lice", "parasites",
+]
+
+# Signals that a query is encyclopedic / general knowledge (suppress behavior trigger)
+_GENERAL_KNOWLEDGE_SIGNALS = [
+    "what is ", "what are ", "what causes ", "how to ", "how do ",
+    "why do chickens", "why does a chicken", "tell me about",
+    "explain ", "define ", "in general",
 ]
 
 
@@ -118,6 +146,12 @@ def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
     # Rule 2: User is asking about their coop right now
     if any(kw in query_lower for kw in _CURRENT_SITUATION_KEYWORDS):
         return True
+
+    # Rule 2.5: Behavioral concern — symptoms that correlate with environment
+    # (but not general knowledge questions like "what causes molting?")
+    if any(kw in query_lower for kw in _BEHAVIOR_KEYWORDS):
+        if not any(sig in query_lower for sig in _GENERAL_KNOWLEDGE_SIGNALS):
+            return True
 
     # Rule 3: Resource question + resource is actually low or empty
     resource_low = (
@@ -290,8 +324,10 @@ def get_critical_alerts(sensor_data: Dict) -> list:
 # =============================================================================
 
 if __name__ == "__main__":
+    _now = datetime.now()
 
     normal = {
+        "timestamp": _now,
         "temperature_c": 22.3, "temperature_status": "normal",
         "humidity_pct": 55, "humidity_status": "normal",
         "heat_stress_index": "normal", "feeder_status": "full",
@@ -314,6 +350,13 @@ if __name__ == "__main__":
         ("My chickens are panting", normal, True),
         ("What breed should I get?", critical, False),
         ("Are my chickens okay?", critical, True),
+        # Broader intent detection
+        ("my chickens won't drink", normal, True),
+        ("are they molting?", normal, True),
+        ("one chicken is coughing", normal, True),
+        ("what causes molting in chickens?", normal, False),
+        ("my chickens have diarrhea, what causes this?", normal, True),
+        ("how to treat mites on chickens", normal, False),
     ]
 
     for query, data, expected in tests:

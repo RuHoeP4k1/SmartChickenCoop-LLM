@@ -42,8 +42,8 @@ class AppState:
 state = AppState()
 
 KNOWLEDGE_BASE_PATH  = os.getenv("KNOWLEDGE_BASE_PATH", "test_docs")
-SCHEDULER_INTERVAL   = int(os.getenv("SCHEDULER_INTERVAL", "60"))   # seconds
 SIMULATION_MODE      = os.getenv("SIMULATION_MODE", "false").lower() == "true"
+SCHEDULER_INTERVAL   = int(os.getenv("SCHEDULER_INTERVAL", "60" if SIMULATION_MODE else "600"))
 CHAT_HISTORY_TURNS   = int(os.getenv("CHAT_HISTORY_TURNS", "2"))
 COOP_LAT             = float(os.getenv("COOP_LAT", "50.8798"))
 COOP_LON             = float(os.getenv("COOP_LON", "4.7005"))
