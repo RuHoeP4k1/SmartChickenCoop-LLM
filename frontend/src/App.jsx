@@ -8,6 +8,7 @@ import AlertFeed from './components/AlertFeed'
 import EggCalendar from './components/EggCalendar'
 import AutomationPanel from './components/AutomationPanel'
 import Weather from './components/Weather'
+import MyChickens from './components/MyChickens'
 
 const TABS = [
   { id: 'welcome',    label: 'Home' },
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'eggs',       label: 'Egg Calendar' },
   { id: 'automation', label: 'Automation' },
   { id: 'weather',    label: 'Weather' },
+  { id: 'chickens',   label: 'My Chickens' },
 ]
 
 export default function App() {
@@ -39,6 +41,7 @@ export default function App() {
       <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><EggCalendar /></div>
       <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
+      <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>
     </Layout>
   )
 }

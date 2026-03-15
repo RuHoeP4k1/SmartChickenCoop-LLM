@@ -76,9 +76,11 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
+                crowding_assesment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
-                door_open, ventilation_on
+                door_open, ventilation_on,
+                error
             FROM sensor_readings
             ORDER BY timestamp DESC
             LIMIT 1
@@ -116,9 +118,11 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
+                crowding_assesment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
-                door_open, ventilation_on
+                door_open, ventilation_on,
+                error
             FROM sensor_readings
             ORDER BY id DESC
             LIMIT %s
@@ -157,9 +161,11 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                    heat_stress_index,
                    feeder_pct, waterer_pct,
                    chickens_inside, egg_count,
+                   crowding_assesment,
                    h2s_ppm, h2s_level,
                    mold_risk_score, mold_risk_status,
-                   door_open, ventilation_on
+                   door_open, ventilation_on,
+                   error
             FROM sensor_readings
             WHERE timestamp >= %s
             ORDER BY timestamp ASC
@@ -199,12 +205,14 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
+                crowding_assesment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
-                door_open, ventilation_on
+                door_open, ventilation_on,
+                error
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
         """
@@ -222,12 +230,14 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('waterer_pct'),
             sensor_data.get('chickens_inside'),
             sensor_data.get('egg_count'),
+            sensor_data.get('crowding_assesment'),
             sensor_data.get('h2s_ppm'),
             sensor_data.get('h2s_level', 'normal'),
             sensor_data.get('mold_risk_score'),
             sensor_data.get('mold_risk_status', 'normal'),
             sensor_data.get('door_open', False),
             sensor_data.get('ventilation_on', False),
+            sensor_data.get('error'),
         )
 
         cursor.execute(query, values)
@@ -368,12 +378,14 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     waterer_pct FLOAT,
     chickens_inside INT,
     egg_count INT,
+    crowding_assesment TEXT,
     h2s_ppm FLOAT,
     h2s_level TEXT DEFAULT 'normal',
     mold_risk_score FLOAT,
     mold_risk_status TEXT DEFAULT 'normal',
     door_open BOOLEAN DEFAULT FALSE,
-    ventilation_on BOOLEAN DEFAULT FALSE
+    ventilation_on BOOLEAN DEFAULT FALSE,
+    error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_timestamp ON sensor_readings(timestamp DESC);
