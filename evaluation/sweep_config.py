@@ -47,7 +47,7 @@ PARAM_GRID = {
     "chunk_size": [600, 1000],
     "k":          [2, 4],
     "weights": [
-        [0.0, 1.0],   # pure semantic (BM25 disabled)
+        [0.0, 1.0],   # sentinel: triggers use_hybrid=False in use_hybrid_flag(), never passed to hybrid_search()
         [0.7, 0.3],   # 70% semantic / 30% BM25
     ],
 }

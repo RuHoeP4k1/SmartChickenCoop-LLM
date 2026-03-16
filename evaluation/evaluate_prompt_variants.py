@@ -5,11 +5,11 @@ Tests different SIMPLE_PROMPT variants against the same fixed RAG pipeline.
 Run AFTER sweep.py has determined the best model / chunk_size / k / weights.
 
 The goal: find which prompt template produces the best answers for general
-(no-sensor) questions, measured both by automated heuristics and by
-human pairwise preference.
+(no-sensor) questions, measured by DeepEval G-Eval (Actionability + Correctness)
+and optionally by human pairwise preference.
 
 Two output modes:
-  1. Automated heuristic scoring (topic coverage, length, actionability)
+  1. DeepEval G-Eval scoring (Actionability, Correctness — AI judge via Claude Haiku)
   2. --export-pairs  → writes results/prompt_pairs.json for human_ranking.py
 
 Usage:
@@ -19,9 +19,9 @@ Usage:
 
 Design axes tested across the four variants:
   baseline  — current production SIMPLE_PROMPT
-  structured — forces numbered output (What to do / Call a vet if)
+  structured — explicit output structure (short answer / steps / conditional vet)
   concise    — minimal instructions, relies on the model's own judgment
-  expert     — positions the assistant as a poultry scientist
+  expert     — positions the assistant as an experienced poultry specialist (researcher + hands-on keeper)
 """
 
 import os
@@ -32,6 +32,9 @@ import argparse
 import random
 from typing import Dict, List
 
+# Disable DeepEval telemetry before any other deepeval import
+os.environ["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
@@ -40,13 +43,61 @@ sys.path.insert(0, _HERE)
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
+from langchain_anthropic import ChatAnthropic
+from deepeval.models.base_model import DeepEvalBaseLLM
+from deepeval.metrics.g_eval.utils import Rubric
+from deepeval.metrics import GEval
+from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+
 from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
     build_bm25_retriever, hybrid_search, semantic_search,
     format_context, generate_response,
 )
-from evaluate_rag import evaluate_answer_quality
 from evaluation_data import TEST_CASES
+from eval_config import ACTIONABILITY_CRITERIA, CORRECTNESS_CRITERIA
+
+
+# =============================================================================
+# AI JUDGE — Claude Haiku (same setup as evaluate_deepeval.py)
+# =============================================================================
+
+JUDGE_MODEL = os.getenv("CLAUDE_JUDGE_MODEL", "claude-haiku-4-5-20251001")
+
+
+class ClaudeJudge(DeepEvalBaseLLM):
+    def __init__(self, model_name: str = JUDGE_MODEL):
+        self.model_name = model_name
+        self.model = ChatAnthropic(model=model_name, temperature=0)
+
+    def load_model(self):
+        return self.model
+
+    def generate(self, prompt: str) -> str:
+        return self.model.invoke(prompt).content
+
+    async def a_generate(self, prompt: str) -> str:
+        return self.generate(prompt)
+
+    def get_model_name(self) -> str:
+        return f"Claude/{self.model_name}"
+
+
+# =============================================================================
+# G-EVAL METRICS — Actionability + Correctness (LLM answer quality only)
+# =============================================================================
+
+_ACTION_RUBRIC = [
+    Rubric(score_range=(0, 3), expected_outcome="Not actionable — vague generalities, nothing the user can act on, repeats the question."),
+    Rubric(score_range=(4, 6), expected_outcome="Somewhat actionable — at least one useful piece of info or step, but leaves important gaps the user must fill."),
+    Rubric(score_range=(7, 10), expected_outcome="Genuinely helpful — directly answers the question, user knows what to do next without searching further."),
+]
+
+_CORRECT_RUBRIC = [
+    Rubric(score_range=(0, 3), expected_outcome="Incorrect or harmful — wrong facts, dangerous advice, contradicts poultry welfare practice."),
+    Rubric(score_range=(4, 6), expected_outcome="Mostly correct — core info is right but has a meaningful inaccuracy, omission, or is overly hedged."),
+    Rubric(score_range=(7, 10), expected_outcome="Correct and appropriate — accurate, safe, calibrated to question scope."),
+]
 
 
 # =============================================================================
@@ -78,15 +129,15 @@ If this involves a sick or injured chicken, mention when a vet or experienced ke
 Keep it short — a few sentences or a brief list is usually enough.""",
 
     # -------------------------------------------------------------------------
-    # STRUCTURED — forces explicit output sections
-    # Similar to the no-RAG baseline in evaluate_rag.py; tests if structure helps.
+    # STRUCTURED — tests whether explicit output structure improves actionability.
+    # Same safety rules and persona undertone as baseline, but with format template.
     # -------------------------------------------------------------------------
-    "structured": """You are ChickenCare AI — a practical assistant for hobby chicken keepers.
+    "structured": """You are a practical chicken-keeping advisor — the kind of knowledgeable friend every flock owner wishes they had. You cut through the noise and give keepers exactly what they need to act on, organized so nothing gets missed.
 
-Hard rules:
-- NEVER suggest medications, dosages, or chemical treatments.
-- Use plain, beginner-friendly language.
-- Use metric units (°C, kg, cm, litres).
+Your rules (non-negotiable):
+- Never suggest medications, dosages, or chemical treatments.
+- Metric units only: °C, kg, cm, litres. Convert any imperial values from the source material before answering.
+- Use plain language — your reader is a hobby keeper, not a vet student.
 
 ---
 {context}
@@ -94,23 +145,23 @@ Hard rules:
 
 Question: {query}
 
-Answer in this format:
+Give your answer in this structure — it makes the advice easier to act on:
 
-**Short answer:** (1–2 sentences — direct and specific)
+**The short answer:** One or two sentences. Direct. No hedging.
 
-**What to do:**
-1. [Specific step]
-2. [Second step]
-3. [What to monitor / for how long]
-(Write "No action needed" if the question is purely factual.)
+**Steps to take:**
+1. First action (specific — what exactly, not just "check the coop")
+2. Second action
+3. What to watch for and over what timeframe
+(If the question is purely factual with nothing to act on, write "No action needed — this is background knowledge.")
 
-**Call a vet if:** [1–2 specific red flags. Write "Not applicable" if unrelated to health.]""",
+**When to call a vet or experienced keeper:** Name the specific warning signs. Only include this section if the question touches health or injury — do not add it as a default safety disclaimer.""",
 
     # -------------------------------------------------------------------------
-    # CONCISE — minimal framing, relies on the model's instruction-following
-    # Tests whether shorter prompts produce better or worse output.
+    # CONCISE — minimal framing, tests whether baseline's explicit guidance is
+    # necessary or whether the model performs equally well with less instruction.
     # -------------------------------------------------------------------------
-    "concise": """You are a helpful assistant for backyard chicken keepers. Answer based only on the knowledge below. Be concise and practical. Use metric units.
+    "concise": """You are a knowledgeable, practical assistant for hobby chicken keepers. Give direct, plain-language advice. Never suggest medications or chemical treatments. Use metric units (°C, kg, cm, litres).
 
 ---
 {context}
@@ -118,13 +169,20 @@ Answer in this format:
 
 Question: {query}
 
-Answer:""",
+Answer concisely based on the knowledge above. Mention a vet only if the question involves illness or injury.""",
 
     # -------------------------------------------------------------------------
-    # EXPERT — positions assistant as a poultry scientist
-    # Tests whether authoritative framing improves factual accuracy/completeness.
+    # EXPERT — positions assistant as experienced poultry specialist
+    # Tests whether domain-expert framing (research + hands-on) improves
+    # accuracy and confidence compared to general-assistant baseline.
     # -------------------------------------------------------------------------
-    "expert": """You are a poultry scientist advising hobby chicken keepers. You give accurate, evidence-based advice grounded in the knowledge below. You never suggest medications or chemical treatments. You use metric units. You are direct and practical — not overly cautious.
+    "expert": """You are an experienced poultry specialist — part researcher, part seasoned flock keeper. You have spent years studying poultry health and husbandry, and just as many years applying it with real backyard flocks. You know the difference between textbook advice and what actually works at 6 a.m. on a cold morning.
+
+You give advice the way an expert gives advice to a friend: direct, accurate, grounded in evidence, and calibrated to what a hobby keeper can realistically do. You do not inflate risks, add unnecessary caveats, or recommend vets for problems an experienced keeper handles routinely.
+
+Constraints:
+- Never suggest medications, dosages, or chemical treatments.
+- Use metric units (°C, kg, cm, litres). Convert any imperial figures from source material before answering.
 
 ---
 {context}
@@ -132,7 +190,7 @@ Answer:""",
 
 Question: {query}
 
-Provide a clear, practical answer based on the knowledge above. If this involves a sick or injured bird, note when professional advice is warranted. Avoid unnecessary hedging.""",
+Answer based on the knowledge above. Be direct and complete — give the keeper enough to act confidently. Where the knowledge base leaves a gap, draw on sound general principles rather than refusing to answer. If the question involves genuine illness or injury, specify which signs would warrant professional advice.""",
 }
 
 
@@ -146,8 +204,10 @@ def run_variant(
     questions: List[Dict],
     vectordb,
     bm25_retriever,
+    actionability_metric: GEval,
+    correctness_metric: GEval,
     k: int = 4,
-    use_hybrid: bool = True,
+    use_hybrid: bool = False,
     weights: list = None,
     llm_model: str = None,
 ) -> List[Dict]:
@@ -157,7 +217,6 @@ def run_variant(
     for i, test in enumerate(questions, 1):
         question = test["question"]
         category = test["category"]
-        expected_topics = test["expected_topics"]
 
         # Retrieve context (same pipeline as production)
         if use_hybrid and bm25_retriever is not None:
@@ -174,7 +233,14 @@ def run_variant(
         answer = generate_response(prompt, model=llm_model)
         elapsed = time.time() - t0
 
-        quality = evaluate_answer_quality(answer, expected_topics, category)
+        # Score with DeepEval G-Eval (AI judge)
+        test_case = LLMTestCase(input=question, actual_output=answer)
+
+        actionability_metric.measure(test_case)
+        action_score = actionability_metric.score
+
+        correctness_metric.measure(test_case)
+        correct_score = correctness_metric.score
 
         results.append({
             "variant": variant_name,
@@ -182,11 +248,12 @@ def run_variant(
             "category": category,
             "answer": answer,
             "time": round(elapsed, 2),
-            "quality": quality,
+            "actionability": action_score,
+            "correctness": correct_score,
         })
 
-        print(f"  [{i}/{len(questions)}] {category}: overall={quality['overall']:.1f}  "
-              f"topics={quality['topics_found']}/{len(expected_topics)}  {elapsed:.1f}s")
+        print(f"  [{i}/{len(questions)}] {category}: action={action_score:.2f}  "
+              f"correct={correct_score:.2f}  {elapsed:.1f}s")
 
     return results
 
@@ -195,10 +262,10 @@ def run_evaluation(
     n_questions: int = None,
     export_pairs: bool = False,
     k: int = 4,
-    use_hybrid: bool = True,
+    use_hybrid: bool = False,
     weights: list = None,
     llm_model: str = None,
-    chunk_size: int = 600,
+    chunk_size: int = 1000,
 ):
     KB_PATH    = os.path.join(_ROOT, "test_docs")
     CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
@@ -207,11 +274,32 @@ def run_evaluation(
 
     print("=" * 80)
     print("PROMPT VARIANT EVALUATION")
-    print(f"  Model: {llm_model or os.getenv('OLLAMA_MODEL', 'smollm2:1.7b')}")
+    print(f"  LLM:   {llm_model or os.getenv('OLLAMA_MODEL', 'smollm2:1.7b')}")
+    print(f"  Judge: {JUDGE_MODEL}")
     print(f"  k={k}  hybrid={use_hybrid}  chunk_size={chunk_size}")
     print("=" * 80)
 
-    print("\nBuilding RAG pipeline...")
+    # ── DeepEval judge setup ─────────────────────────────────────────────────
+    print("\nSetting up AI judge...")
+    judge = ClaudeJudge(model_name=JUDGE_MODEL)
+
+    actionability_metric = GEval(
+        name="Actionability",
+        criteria=ACTIONABILITY_CRITERIA,
+        evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
+        model=judge,
+        rubric=_ACTION_RUBRIC,
+    )
+    correctness_metric = GEval(
+        name="Correctness",
+        criteria=CORRECTNESS_CRITERIA,
+        evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
+        model=judge,
+        rubric=_CORRECT_RUBRIC,
+    )
+
+    # ── RAG pipeline setup ───────────────────────────────────────────────────
+    print("Building RAG pipeline...")
     docs    = load_documents(KB_PATH)
     chunks  = split_documents(docs, chunk_size=chunk_size)
     vectordb = build_vector_store(chunks, persist_dir=CHROMA_DIR, folder_path=KB_PATH)
@@ -228,23 +316,24 @@ def run_evaluation(
         print(f"{'─' * 60}")
         all_results[variant_name] = run_variant(
             variant_name, prompt_template, questions,
-            vectordb, bm25, k=k, use_hybrid=use_hybrid,
+            vectordb, bm25,
+            actionability_metric=actionability_metric,
+            correctness_metric=correctness_metric,
+            k=k, use_hybrid=use_hybrid,
             weights=weights, llm_model=llm_model,
         )
 
     # ── Summary table ────────────────────────────────────────────────────────
     print("\n" + "=" * 80)
-    print("SUMMARY")
+    print("SUMMARY  (DeepEval G-Eval, 0–1 scale)")
     print("=" * 80)
-    print(f"{'Variant':<14} {'Avg overall':>11} {'Avg topics%':>11} {'Avg length':>10} {'Avg action':>10}")
-    print("─" * 60)
+    print(f"{'Variant':<14} {'Actionability':>14} {'Correctness':>12}")
+    print("─" * 44)
     for variant_name, results in all_results.items():
         n = len(results)
-        avg_overall  = sum(r["quality"]["overall"]          for r in results) / n
-        avg_topics   = sum(r["quality"]["topic_coverage"]   for r in results) / n
-        avg_length   = sum(r["quality"]["length_appropriate"] for r in results) / n
-        avg_action   = sum(r["quality"]["actionable"]       for r in results) / n
-        print(f"{variant_name:<14} {avg_overall:>11.1f} {avg_topics:>11.1f} {avg_length:>10.1f} {avg_action:>10.1f}")
+        avg_action  = sum(r["actionability"] for r in results) / n
+        avg_correct = sum(r["correctness"]   for r in results) / n
+        print(f"{variant_name:<14} {avg_action:>14.4f} {avg_correct:>12.4f}")
 
     # ── Save raw results ──────────────────────────────────────────────────────
     out_path = os.path.join(RESULTS_DIR, "prompt_variant_results.json")
@@ -311,9 +400,9 @@ if __name__ == "__main__":
     parser.add_argument("--export-pairs", action="store_true",
                         help="Export pairwise JSON for human ranking")
     parser.add_argument("--k", type=int, default=4)
-    parser.add_argument("--chunk-size", type=int, default=600)
-    parser.add_argument("--no-hybrid", action="store_true",
-                        help="Use pure semantic retrieval (skip BM25)")
+    parser.add_argument("--chunk-size", type=int, default=1000)
+    parser.add_argument("--hybrid", action="store_true",
+                        help="Use hybrid retrieval (BM25 + semantic) instead of pure semantic")
     parser.add_argument("--model", type=str, default=None,
                         help="LLM model override (e.g. openrouter/qwen/qwen3-8b)")
     args = parser.parse_args()
@@ -322,7 +411,7 @@ if __name__ == "__main__":
         n_questions=args.n_questions,
         export_pairs=args.export_pairs,
         k=args.k,
-        use_hybrid=not args.no_hybrid,
+        use_hybrid=args.hybrid,
         llm_model=args.model,
         chunk_size=args.chunk_size,
     )

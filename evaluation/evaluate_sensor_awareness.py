@@ -324,7 +324,7 @@ def run_evaluation(
     verbose: bool = False,
     llm_model: str = None,
     k: int = 4,
-    chunk_size: int = 600,
+    chunk_size: int = 1000,
 ):
     KB_PATH    = os.path.join(_ROOT, "test_docs")
     CHROMA_DIR = os.path.join(_ROOT, "chroma_db")

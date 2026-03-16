@@ -22,7 +22,7 @@ frontend/dist/
 
 # Claude Code settings (local only)
 .claude/
-
+CLAUDE.md
 # Sensor team code (contains hardcoded credentials)
 MONITORING/
 

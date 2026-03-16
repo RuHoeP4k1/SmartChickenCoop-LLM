@@ -263,7 +263,7 @@ def get_sensor_context(sensor_data: Dict) -> str:
         alerts.append(f"Eggs detected: {eggs}")
 
     # Crowding assessment — always include when available
-    crowding = sensor_data.get("crowding_assesment")
+    crowding = sensor_data.get("crowding_assessment")
     if crowding is not None:
         alerts.append(f"Crowding assessment: {crowding}")
 

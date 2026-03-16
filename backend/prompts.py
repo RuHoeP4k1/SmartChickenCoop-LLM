@@ -107,7 +107,6 @@ def get_prompt(
     context: str,
     sensor_context: str = None,
     has_critical: bool = False,
-    history: list = None,   # reserved for future use; not yet used
 ) -> str:
     """
     Select and format the appropriate prompt for the current situation.

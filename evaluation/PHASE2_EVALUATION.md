@@ -10,18 +10,17 @@ Once the configuration sweep (model / chunk_size / k / weights) is complete, two
 
 Four variants of the `SIMPLE_PROMPT` are tested (the most-used path — no live sensor context):
 
-| Variant | Design choice |
+| Variant | Design hypothesis |
 |---|---|
-| `baseline` | Current production prompt |
-| `structured` | Forces numbered output (Short answer / What to do / Call a vet if) |
-| `concise` | Minimal instructions — relies on the model's own judgement |
-| `expert` | Positions the assistant as a poultry scientist |
+| `baseline` | Current production prompt (reference) |
+| `structured` | Does explicit output structure (short answer / steps / conditional vet) improve actionability? |
+| `concise` | Is baseline's explicit guidance necessary, or does minimal framing work equally well? |
+| `expert` | Does experienced domain-expert positioning (researcher + hands-on keeper) improve accuracy? |
 
 Evaluation is done in two ways:
 
-1. **Automated heuristic scoring** — topic coverage, length appropriateness, actionability (same metrics as `evaluate_rag.py`).
-2. **Human pairwise preference** — blinded A vs B comparisons where raters don't know which variant they're seeing. Results are aggregated into win rates and ELO scores. This human evaluation method can be extended beyond 
-only evaluating the different prompt variants ofc!
+1. **DeepEval G-Eval scoring** — Actionability + Correctness (AI judge via Claude Haiku). These measure LLM answer quality independent of retrieval.
+2. **Human pairwise preference** — blinded A vs B comparisons where raters don't know which variant they're seeing. Results are aggregated into win rates and ELO scores. This human evaluation method can be extended beyond only evaluating the different prompt variants ofc!
 
 ---
 
@@ -58,7 +57,7 @@ Eleven test scenarios cover these cases using mocked sensor snapshots (no Pi or 
 
 | File | Purpose |
 |---|---|
-| `evaluate_prompt_variants.py` | Automated scoring of 4 prompt variants + pairwise export |
+| `evaluate_prompt_variants.py` | DeepEval G-Eval scoring of 4 prompt variants + pairwise export |
 | `evaluate_sensor_awareness.py` | Sensor awareness scoring across 11 scenarios |
 | `human_ranking.py` | CLI pairwise ranking tool (ELO + win rates) |
 

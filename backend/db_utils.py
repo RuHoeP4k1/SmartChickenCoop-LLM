@@ -76,7 +76,7 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
-                crowding_assesment,
+                crowding_assessment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
                 door_open, ventilation_on,
@@ -118,7 +118,7 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
-                crowding_assesment,
+                crowding_assessment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
                 door_open, ventilation_on,
@@ -161,7 +161,7 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                    heat_stress_index,
                    feeder_pct, waterer_pct,
                    chickens_inside, egg_count,
-                   crowding_assesment,
+                   crowding_assessment,
                    h2s_ppm, h2s_level,
                    mold_risk_score, mold_risk_status,
                    door_open, ventilation_on,
@@ -205,7 +205,7 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 chickens_inside, egg_count,
-                crowding_assesment,
+                crowding_assessment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
                 door_open, ventilation_on,
@@ -230,7 +230,7 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('waterer_pct'),
             sensor_data.get('chickens_inside'),
             sensor_data.get('egg_count'),
-            sensor_data.get('crowding_assesment'),
+            sensor_data.get('crowding_assessment'),
             sensor_data.get('h2s_ppm'),
             sensor_data.get('h2s_level', 'normal'),
             sensor_data.get('mold_risk_score'),
@@ -378,7 +378,7 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     waterer_pct FLOAT,
     chickens_inside INT,
     egg_count INT,
-    crowding_assesment TEXT,
+    crowding_assessment TEXT,
     h2s_ppm FLOAT,
     h2s_level TEXT DEFAULT 'normal',
     mold_risk_score FLOAT,
@@ -410,69 +410,27 @@ def setup_database():
         release_db_connection(conn)
 
 
-def insert_mock_data():
-    """
-    Insert some mock sensor data for testing.
-    Run this to populate database with test data.
-    """
-    mock_readings = [
-        {
-            "timestamp": datetime.now() - timedelta(minutes=45),
-            "temperature_c": 22.3,
-            "temperature_status": "normal",
-            "humidity_pct": 55,
-            "humidity_status": "normal",
-            "heat_stress_index": "normal",
-            "feeder_status": "full",
-            "waterer_status": "full"
-        },
-        {
-            "timestamp": datetime.now() - timedelta(minutes=30),
-            "temperature_c": 28.5,
-            "temperature_status": "warning",
-            "humidity_pct": 72,
-            "humidity_status": "normal",
-            "heat_stress_index": "warning",
-            "feeder_status": "full",
-            "waterer_status": "full"
-        },
-        {
-            "timestamp": datetime.now() - timedelta(minutes=15),
-            "temperature_c": 35.2,
-            "temperature_status": "critical",
-            "humidity_pct": 85,
-            "humidity_status": "critical",
-            "heat_stress_index": "critical",
-            "feeder_status": "low",
-            "waterer_status": "empty"
-        }
-    ]
-
-    for reading in mock_readings:
-        insert_sensor_reading(reading)
-
-    print(f"Inserted {len(mock_readings)} mock readings")
-
-
 if __name__ == "__main__":
     """
-    Run this script directly to set up database and insert test data.
+    Run this script directly to set up database tables.
 
     Usage:
         python db_utils.py
+    For demo data, use: python scripts/generate_demo_data.py
     """
     print("Setting up database...")
 
     try:
         setup_database()
-        insert_mock_data()
 
-        # Test query
         latest = get_latest_sensor_reading()
-        print(f"\nLatest sensor reading:")
-        print(f"   Temperature: {latest['temperature_c']}C [{latest['temperature_status']}]")
-        print(f"   Humidity: {latest['humidity_pct']}% [{latest['humidity_status']}]")
-        print(f"   Heat stress: {latest['heat_stress_index']}")
+        if latest:
+            print(f"\nLatest sensor reading:")
+            print(f"   Temperature: {latest['temperature_c']}C [{latest['temperature_status']}]")
+            print(f"   Humidity: {latest['humidity_pct']}% [{latest['humidity_status']}]")
+            print(f"   Heat stress: {latest['heat_stress_index']}")
+        else:
+            print("\nNo sensor readings yet. Run: python scripts/generate_demo_data.py")
 
     except Exception as e:
         print(f"Database error: {e}")
