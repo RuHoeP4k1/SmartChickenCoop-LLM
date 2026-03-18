@@ -8,7 +8,7 @@ import re
 import json
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 from dotenv import load_dotenv
 load_dotenv()

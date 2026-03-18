@@ -16,7 +16,7 @@ const METRICS = [
   { key: 'waterer_pct',    label: 'Waterer',     unit: '%',    color: '#2563eb', domain: [0, 100]         },
   { key: 'h2s_ppm',        label: 'H₂S',         unit: 'ppm',  color: '#dc2626', domain: [0, 50]          },
   { key: 'mold_risk_score',label: 'Mold Risk',   unit: '',     color: '#7c3aed', domain: [0, 100]         },
-  { key: 'chickens_inside',label: 'Chickens',    unit: '',     color: '#d97706', domain: [0, 20]          },
+  { key: 'number_of_chickens', label: 'Chickens', unit: '',     color: '#d97706', domain: [0, 20]          },
 ]
 
 const RANGES = [

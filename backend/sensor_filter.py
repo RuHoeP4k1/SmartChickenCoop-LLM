@@ -253,7 +253,9 @@ def get_sensor_context(sensor_data: Dict) -> str:
         alerts.append("Coop door: open")
 
     # Chickens inside — always include (useful operational context)
-    chickens = sensor_data.get("chickens_inside")
+    # number_of_chickens is the canonical name from cv_counts_colson;
+    # chickens_inside is kept as an alias for backwards compat.
+    chickens = sensor_data.get("number_of_chickens") or sensor_data.get("chickens_inside")
     if chickens is not None:
         alerts.append(f"Chickens inside coop: {chickens}")
 
@@ -261,11 +263,6 @@ def get_sensor_context(sensor_data: Dict) -> str:
     eggs = sensor_data.get("egg_count")
     if eggs is not None and eggs > 0:
         alerts.append(f"Eggs detected: {eggs}")
-
-    # Crowding assessment — always include when available
-    crowding = sensor_data.get("crowding_assessment")
-    if crowding is not None:
-        alerts.append(f"Crowding assessment: {crowding}")
 
     # Ventilation — include when on (relevant for temp/H2S alerts)
     if sensor_data.get("ventilation_on"):

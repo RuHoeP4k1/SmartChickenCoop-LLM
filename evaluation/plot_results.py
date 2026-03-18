@@ -22,9 +22,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyBboxPatch
-import matplotlib.gridspec as gridspec
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(_HERE, "results")
@@ -123,9 +120,9 @@ def fig1_llm_comparison(df: pd.DataFrame, out_dir: str) -> None:
         sub = df[df["llm"] == llm]
         means = [valid_mean(sub[m]) for m in METRICS]
         sems  = [valid_sem(sub[m])  for m in METRICS]
-        bars  = ax.bar(x + offset, means, bar_w,
-                       label=LLM_SHORT[llm], color=color, alpha=0.85,
-                       yerr=sems, capsize=3, error_kw={"elinewidth": 1.2})
+        ax.bar(x + offset, means, bar_w,
+               label=LLM_SHORT[llm], color=color, alpha=0.85,
+               yerr=sems, capsize=3, error_kw={"elinewidth": 1.2})
 
     ax.set_xticks(x)
     ax.set_xticklabels([METRIC_LABELS[m] for m in METRICS], fontsize=10)

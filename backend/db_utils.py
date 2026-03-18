@@ -58,38 +58,47 @@ def release_db_connection(conn):
 
 def get_latest_sensor_reading() -> Optional[Dict]:
     """
-    Get the most recent sensor reading from database.
+    Get the most recent sensor reading, merged with the latest CV counts.
+
+    Queries sensor_readings_colson and LEFT JOINs the latest row from
+    cv_counts_colson so callers get a single unified dict.
+    chickens_inside is aliased from number_of_chickens for backwards compat.
 
     Returns:
-        Dictionary with sensor data, or None if no data
+        Dictionary with sensor + cv data, or None if no data
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-        query = """
+        cursor.execute(
+            """
             SELECT
-                id, timestamp,
-                temperature_c, temperature_status,
-                humidity_pct, humidity_status,
-                heat_stress_index,
-                feeder_status, waterer_status,
-                feeder_pct, waterer_pct,
-                chickens_inside, egg_count,
-                crowding_assessment,
-                h2s_ppm, h2s_level,
-                mold_risk_score, mold_risk_status,
-                door_open, ventilation_on,
-                error
-            FROM sensor_readings
-            ORDER BY timestamp DESC
+                s.id, s.timestamp,
+                s.temperature_c, s.temperature_status,
+                s.humidity_pct, s.humidity_status,
+                s.heat_stress_index,
+                s.feeder_status, s.waterer_status,
+                s.feeder_pct, s.waterer_pct,
+                s.h2s_ppm, s.h2s_level,
+                s.mold_risk_score, s.mold_risk_status,
+                s.door_open, s.ventilation_on,
+                s.error,
+                cv.number_of_chickens,
+                cv.number_of_chickens AS chickens_inside,
+                cv.egg_count
+            FROM sensor_readings_colson s
+            LEFT JOIN LATERAL (
+                SELECT number_of_chickens, egg_count
+                FROM cv_counts_colson
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ) cv ON true
+            ORDER BY s.timestamp DESC
             LIMIT 1
-        """
-
-        cursor.execute(query)
+            """
+        )
         result = cursor.fetchone()
         cursor.close()
-
         return dict(result) if result else None
     finally:
         release_db_connection(conn)
@@ -117,13 +126,11 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
                 heat_stress_index,
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
-                chickens_inside, egg_count,
-                crowding_assessment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
                 door_open, ventilation_on,
                 error
-            FROM sensor_readings
+            FROM sensor_readings_colson
             ORDER BY id DESC
             LIMIT %s
         """
@@ -155,20 +162,26 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
         since = datetime.now() - timedelta(hours=hours)
         cursor.execute(
             """
-            SELECT timestamp,
-                   temperature_c, temperature_status,
-                   humidity_pct, humidity_status,
-                   heat_stress_index,
-                   feeder_pct, waterer_pct,
-                   chickens_inside, egg_count,
-                   crowding_assessment,
-                   h2s_ppm, h2s_level,
-                   mold_risk_score, mold_risk_status,
-                   door_open, ventilation_on,
-                   error
-            FROM sensor_readings
-            WHERE timestamp >= %s
-            ORDER BY timestamp ASC
+            SELECT s.timestamp,
+                   s.temperature_c, s.temperature_status,
+                   s.humidity_pct, s.humidity_status,
+                   s.heat_stress_index,
+                   s.feeder_pct, s.waterer_pct,
+                   s.h2s_ppm, s.h2s_level,
+                   s.mold_risk_score, s.mold_risk_status,
+                   s.door_open, s.ventilation_on,
+                   s.error,
+                   cv.number_of_chickens
+            FROM sensor_readings_colson s
+            LEFT JOIN LATERAL (
+                SELECT number_of_chickens
+                FROM cv_counts_colson
+                WHERE ABS(EXTRACT(EPOCH FROM (timestamp - s.timestamp))) <= 300
+                ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - s.timestamp)))
+                LIMIT 1
+            ) cv ON true
+            WHERE s.timestamp >= %s
+            ORDER BY s.timestamp ASC
             LIMIT %s
             """,
             (since, limit),
@@ -197,22 +210,20 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
         cursor = conn.cursor()
 
         query = """
-            INSERT INTO sensor_readings (
+            INSERT INTO sensor_readings_colson (
                 timestamp,
                 temperature_c, temperature_status,
                 humidity_pct, humidity_status,
                 heat_stress_index,
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
-                chickens_inside, egg_count,
-                crowding_assessment,
                 h2s_ppm, h2s_level,
                 mold_risk_score, mold_risk_status,
                 door_open, ventilation_on,
                 error
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
         """
@@ -228,9 +239,6 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('waterer_status', 'full'),
             sensor_data.get('feeder_pct'),
             sensor_data.get('waterer_pct'),
-            sensor_data.get('chickens_inside'),
-            sensor_data.get('egg_count'),
-            sensor_data.get('crowding_assessment'),
             sensor_data.get('h2s_ppm'),
             sensor_data.get('h2s_level', 'normal'),
             sensor_data.get('mold_risk_score'),
@@ -250,6 +258,59 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
     except Exception:
         conn.rollback()
         raise
+    finally:
+        release_db_connection(conn)
+
+
+# =============================================================================
+# CV COUNTS
+# =============================================================================
+
+def insert_cv_count(chickens: int, eggs: int) -> int:
+    """Insert a new row into cv_counts_colson. Returns the new row id."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO cv_counts_colson (timestamp, number_of_chickens, egg_count)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (datetime.now(), chickens, eggs),
+        )
+        row_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        return row_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
+def get_latest_cv_count() -> Optional[tuple]:
+    """
+    Return (number_of_chickens, egg_count) of the most recent row,
+    or None if the table is empty.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            SELECT number_of_chickens, egg_count
+            FROM cv_counts_colson
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if row is None:
+            return None
+        return (row["number_of_chickens"], row["egg_count"])
     finally:
         release_db_connection(conn)
 
@@ -363,8 +424,8 @@ def get_recent_events(limit: int = 20, event_type: str = None) -> List[Dict]:
 # DATABASE SETUP
 # =============================================================================
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS sensor_readings (
+CREATE_SENSOR_READINGS_COLSON_SQL = """
+CREATE TABLE IF NOT EXISTS sensor_readings_colson (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     temperature_c FLOAT,
@@ -376,9 +437,6 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     waterer_status TEXT DEFAULT 'full',
     feeder_pct FLOAT,
     waterer_pct FLOAT,
-    chickens_inside INT,
-    egg_count INT,
-    crowding_assessment TEXT,
     h2s_ppm FLOAT,
     h2s_level TEXT DEFAULT 'normal',
     mold_risk_score FLOAT,
@@ -388,7 +446,18 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     error TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_sensor_timestamp ON sensor_readings(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_sensor_colson_timestamp ON sensor_readings_colson(timestamp DESC);
+"""
+
+CREATE_CV_COUNTS_SQL = """
+CREATE TABLE IF NOT EXISTS cv_counts_colson (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    number_of_chickens INT,
+    egg_count INT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cv_colson_timestamp ON cv_counts_colson(timestamp DESC);
 """
 
 
@@ -400,12 +469,13 @@ def setup_database():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(CREATE_TABLE_SQL)
+        cursor.execute(CREATE_SENSOR_READINGS_COLSON_SQL)
+        cursor.execute(CREATE_CV_COUNTS_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)
         cursor.execute(MIGRATE_EVENT_LOG_SQL)
         conn.commit()
         cursor.close()
-        print("Database tables created successfully (sensor_readings + event_log)")
+        print("Database tables created successfully (sensor_readings_colson + cv_counts_colson + event_log)")
     finally:
         release_db_connection(conn)
 
