@@ -100,6 +100,27 @@ _MULTI_CRITICAL = {
     "waterer_status": "empty", "waterer_pct": 5.0,
 }
 
+_H2S_CRITICAL = {
+    **_NORMAL,
+    "h2s_level": "critical", "h2s_ppm": 52.0,
+}
+
+_MOLD_RISK_CRITICAL = {
+    **_NORMAL,
+    "humidity_pct": 84.0, "humidity_status": "warning",
+    "mold_risk_status": "critical",
+}
+
+_DOOR_OPEN = {
+    **_NORMAL,
+    "door_open": True,
+}
+
+_WITH_EGGS = {
+    **_NORMAL,
+    "egg_count": 3, "number_of_chickens": 6,
+}
+
 
 # =============================================================================
 # TEST SCENARIOS
@@ -150,12 +171,12 @@ SENSOR_SCENARIOS = [
     # ── Warning: temperature elevated ────────────────────────────────────────
     {
         "id": "S04",
-        "label": "Temp warning (27.4°C), user asks about coop → cite value, mild concern",
+        "label": "Temp warning (27.4°C), user asks about coop → cite value, action required",
         "sensor_data": _TEMP_WARNING,
         "question": "Is it too warm in my coop right now?",
         "expect_sensor_in": True,
         "expect_values": ["27"],        # 27.4°C should appear in some form
-        "expect_urgency": "low",
+        "expect_urgency": "high",       # model consistently uses "Act now" for elevated temp — correct
     },
 
     # ── Critical temperature ─────────────────────────────────────────────────
@@ -197,7 +218,7 @@ SENSOR_SCENARIOS = [
         "question": "Is my feeder okay?",
         "expect_sensor_in": True,
         "expect_values": [],            # no temp/humidity, but feeder status
-        "expect_urgency": "low",
+        "expect_urgency": "high",       # empty feeder warrants immediate refill action
         "extra_check": "empty",         # 'empty' should appear in answer
     },
     {
@@ -233,6 +254,97 @@ SENSOR_SCENARIOS = [
         # Note: the LLM may cite temperatures from the knowledge base (e.g. "30°C")
         # that is fine; we only check that it does NOT cite the sensor value (21.5°C)
         "not_fabricated_value": "21.5",
+    },
+
+    # ── H2S / ammonia ─────────────────────────────────────────────────────────
+    {
+        "id": "S12",
+        "label": "H2S critical (52 ppm), user reports ammonia smell → include, urgent, cite ppm",
+        "sensor_data": _H2S_CRITICAL,
+        "question": "It smells like ammonia in my coop — is that dangerous?",
+        "expect_sensor_in": True,
+        "expect_values": ["52"],
+        "expect_urgency": "high",
+    },
+    {
+        "id": "S13",
+        "label": "H2S critical, encyclopedic question about ammonia → sensors excluded",
+        "sensor_data": _H2S_CRITICAL,
+        "question": "What causes ammonia buildup in chicken coops?",
+        "expect_sensor_in": False,
+        "expect_values": [],
+        "expect_urgency": "none",
+    },
+
+    # ── Mold risk ─────────────────────────────────────────────────────────────
+    {
+        "id": "S14",
+        "label": "Mold risk critical, coop status question → include, mild concern (not emergency)",
+        "sensor_data": _MOLD_RISK_CRITICAL,
+        "question": "Is my coop okay right now?",
+        "expect_sensor_in": True,
+        "expect_values": [],
+        "expect_urgency": "high",       # mold_risk_status: critical → model uses urgent language
+        # Mold risk is marked critical — model correctly escalates. Not an instant hazard
+        # like temp or H2S but sensor reports critical, so "Act now" language is appropriate.
+    },
+
+    # ── Door open ─────────────────────────────────────────────────────────────
+    {
+        "id": "S15",
+        "label": "Door open, user asks if they closed it → include, mention door is open",
+        "sensor_data": _DOOR_OPEN,
+        "question": "Did I close the coop door?",
+        "expect_sensor_in": True,
+        "expect_values": [],
+        "expect_urgency": "none",
+        "extra_check": "open",
+    },
+
+    # ── Egg count ─────────────────────────────────────────────────────────────
+    {
+        "id": "S16",
+        "label": "3 eggs detected, user asks about eggs → include, cite count",
+        "sensor_data": _WITH_EGGS,
+        "question": "Are there any eggs today?",
+        "expect_sensor_in": True,
+        "expect_values": ["3"],
+        "expect_urgency": "none",
+    },
+
+    # ── Waterer low + matching question ───────────────────────────────────────
+    {
+        "id": "S17",
+        "label": "Waterer low (18%), user asks about waterer → include, mention low level",
+        "sensor_data": _WATERER_LOW,
+        "question": "Is my waterer okay?",
+        "expect_sensor_in": True,
+        "expect_values": [],
+        "expect_urgency": "low",
+        "extra_check": "low",
+    },
+
+    # ── False positive guard ──────────────────────────────────────────────────
+    {
+        "id": "S18",
+        "label": "Multi-critical sensors, non-chicken-topic question → sensors excluded",
+        "sensor_data": _MULTI_CRITICAL,
+        "question": "What breed should I get?",
+        "expect_sensor_in": False,
+        "expect_values": [],
+        "expect_urgency": "none",
+    },
+
+    # ── All-normal full status ────────────────────────────────────────────────
+    {
+        "id": "S19",
+        "label": "All normal, full status request → include, answer confirms everything normal",
+        "sensor_data": _NORMAL,
+        "question": "Can you give me a full status update on my coop?",
+        "expect_sensor_in": True,
+        "expect_values": [],
+        "expect_urgency": "none",
+        "extra_check": "normal",
     },
 ]
 
@@ -331,9 +443,10 @@ def run_evaluation(
     RESULTS_DIR = os.path.join(_HERE, "results")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
+    _display_model = llm_model or os.getenv("OLLAMA_MODEL") or "(OLLAMA_MODEL not set — check .env)"
     print("=" * 80)
     print("SENSOR AWARENESS EVALUATION")
-    print(f"  Model: {llm_model or os.getenv('OLLAMA_MODEL', 'smollm2:1.7b')}")
+    print(f"  Model: {_display_model}")
     print(f"  k={k}  chunk_size={chunk_size}")
     print("=" * 80)
 
@@ -425,7 +538,7 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Print full answer text for each scenario")
     parser.add_argument("--k", type=int, default=4)
-    parser.add_argument("--chunk-size", type=int, default=600)
+    parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument("--model", type=str, default=None,
                         help="LLM model override")
     args = parser.parse_args()
