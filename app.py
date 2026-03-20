@@ -212,7 +212,7 @@ def setup_db():
     """Create database tables (run once)."""
     try:
         setup_database()
-        return {"status": "ok", "message": "Database tables created (sensor_readings + event_log)"}
+        return {"status": "ok", "message": "Database tables created (sensor_readings_colson + cv_counts_colson + event_log)"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Setup failed: {e}")
 

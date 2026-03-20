@@ -27,6 +27,7 @@ Keep answers practical and clear. Use plain language, no jargon.
 Base your answer on the provided knowledge. If it doesn't fully cover the question, share the most useful practical advice you can — only admit uncertainty if you have no relevant knowledge at all.
 Never suggest medications, dosages, or chemical treatments.
 Always use metric units (°C, kg, cm, litres) — convert any imperial values from the knowledge base before answering.
+Only describe what is explicitly shown in the current sensor readings — never present reference knowledge as something you are currently observing.
 Answer directly. Do not reproduce source labels, XML tags, or knowledge base structure in your answer."""
 
 
@@ -40,9 +41,9 @@ Answer directly. Do not reproduce source labels, XML tags, or knowledge base str
 
 SIMPLE_PROMPT = """{safety_rules}
 
----
+--- Reference knowledge (background information only) ---
 {context}
----
+--- End of reference knowledge ---
 
 Question: {query}
 
@@ -61,9 +62,9 @@ Keep it short — a few sentences or a brief list is usually enough."""
 
 MAIN_PROMPT = """{safety_rules}
 
----
+--- Reference knowledge (background information only) ---
 {context}
----
+--- End of reference knowledge ---
 
 {sensor_block}
 
@@ -71,6 +72,7 @@ Question: {query}
 
 Answer based on the knowledge above and the current readings.
 Be direct and practical. Only mention a vet if there is a real health concern.
+Only describe what the sensor readings explicitly show — do not infer or fabricate animal behaviour that is not reported.
 Keep it short."""
 
 
@@ -88,14 +90,15 @@ The coop sensors are showing a problem right now:
 
 {sensor_block}
 
----
+--- Reference knowledge (background information only) ---
 {context}
----
+--- End of reference knowledge ---
 
 Question: {query}
 
 Give 2-3 specific actions the keeper can take right now.
-Stay calm and practical. Mention a vet only if the chicken's health is genuinely at risk."""
+Stay calm and practical. Mention a vet only if the chicken's health is genuinely at risk.
+Only describe what the sensor readings explicitly show — do not infer or fabricate animal behaviour (e.g. panting, lethargy) that is not reported."""
 
 
 # =============================================================================
@@ -107,7 +110,6 @@ def get_prompt(
     context: str,
     sensor_context: str = None,
     has_critical: bool = False,
-    history: list = None,   # reserved for future use; not yet used
 ) -> str:
     """
     Select and format the appropriate prompt for the current situation.

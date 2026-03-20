@@ -19,7 +19,7 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from backend.db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading
+from backend.db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading, insert_cv_count
 from backend.sensor_filter import get_sensor_context, get_critical_alerts, is_reading_stale
 from backend.rag_functions import answer_query
 
@@ -329,6 +329,7 @@ def _sim_insert_reading():
     s["door_open"] = 6 <= hour <= 20 and temp < 35
 
     # ---- build reading with derived status fields ----
+    # cv data (chickens, eggs) goes to cv_counts_colson via insert_cv_count
     reading = {
         "temperature_c": round(s["temperature_c"], 2),
         "temperature_status": _classify_temp(s["temperature_c"]),
@@ -339,8 +340,6 @@ def _sim_insert_reading():
         "feeder_status": _feeder_status(s["feeder_pct"]),
         "waterer_pct": round(s["waterer_pct"], 1),
         "waterer_status": _waterer_status(s["waterer_pct"]),
-        "chickens_inside": s["chickens_inside"],
-        "egg_count": s["egg_count"],
         "h2s_ppm": round(s["h2s_ppm"], 2),
         "h2s_level": _classify_h2s(s["h2s_ppm"]),
         "mold_risk_score": round(s["mold_risk_score"], 1),
@@ -351,6 +350,7 @@ def _sim_insert_reading():
 
     try:
         insert_sensor_reading(reading)
+        insert_cv_count(s["chickens_inside"], s["egg_count"])
         logger.debug(
             f"Sim: T={reading['temperature_c']}°C H={reading['humidity_pct']}% "
             f"feeder={reading['feeder_pct']}% h2s={reading['h2s_ppm']}ppm "

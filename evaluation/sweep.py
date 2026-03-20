@@ -437,7 +437,6 @@ def main():
 
     # Build design
     from sweep_config import LEVELS as _LEVELS
-    import itertools as _it
     full_size = 1
     for lv in _LEVELS:
         full_size *= lv

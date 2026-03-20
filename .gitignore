@@ -22,9 +22,13 @@ frontend/dist/
 
 # Claude Code settings (local only)
 .claude/
-
+CLAUDE.md
 # Sensor team code (contains hardcoded credentials)
 MONITORING/
+
+# Local analysis notes (not for repo)
+mixed_model_analysis.md
+round1_analysis.md
 
 # Logs
 *.log

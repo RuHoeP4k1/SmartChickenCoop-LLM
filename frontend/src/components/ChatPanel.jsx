@@ -161,6 +161,7 @@ export default function ChatPanel() {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [useSensors, setUseSensors] = useState(true)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -179,7 +180,7 @@ export default function ChatPanel() {
     setLoading(true)
 
     try {
-      const result = await askQuestion(query, history)
+      const result = await askQuestion(query, history, useSensors)
       setMessages(prev => [
         ...prev,
         {
@@ -218,6 +219,20 @@ export default function ChatPanel() {
 
       {/* Input bar */}
       <div className="shrink-0 border-t border-stone-200 dark:border-stone-700/50 bg-white dark:bg-stone-800 px-4 py-4">
+        <div className="max-w-3xl mx-auto flex items-center gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => setUseSensors(prev => !prev)}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              useSensors
+                ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-600'
+                : 'bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400 border-stone-300 dark:border-stone-600'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${useSensors ? 'bg-amber-500' : 'bg-stone-400'}`} />
+            Sensors {useSensors ? 'on' : 'off'}
+          </button>
+        </div>
         <form onSubmit={submit} className="max-w-3xl mx-auto relative">
           <input
             type="text"

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timedelta
 import math
 import random
-from backend.db_utils import insert_sensor_reading, setup_database
+from backend.db_utils import insert_sensor_reading, insert_cv_count, setup_database
 
 
 # ---------------------------------------------------------------------------
@@ -124,26 +124,29 @@ def _make_timeline_state(timestamps):
         ventilation_on = temp >= 28 or h2s >= 5
         door_open = 6 <= hour <= 20 and temp < 35
 
-        yield {
-            "timestamp": ts,
-            "temperature_c": round(temp, 2),
-            "temperature_status": _classify_temp(temp),
-            "humidity_pct": round(hum, 2),
-            "humidity_status": _classify_humidity(hum),
-            "heat_stress_index": _classify_heat_stress(temp, hum),
-            "feeder_pct": round(feeder, 1),
-            "feeder_status": _feeder_status(feeder),
-            "waterer_pct": round(waterer, 1),
-            "waterer_status": _waterer_status(waterer),
-            "chickens_inside": int(round(inside)),
-            "egg_count": eggs,
-            "h2s_ppm": round(h2s, 2),
-            "h2s_level": _classify_h2s(h2s),
-            "mold_risk_score": round(mold, 1),
-            "mold_risk_status": _classify_mold(mold),
-            "door_open": door_open,
-            "ventilation_on": ventilation_on,
-        }
+        # Yield (sensor_dict, chickens, eggs) — cv data goes to cv_counts_colson separately
+        yield (
+            {
+                "timestamp": ts,
+                "temperature_c": round(temp, 2),
+                "temperature_status": _classify_temp(temp),
+                "humidity_pct": round(hum, 2),
+                "humidity_status": _classify_humidity(hum),
+                "heat_stress_index": _classify_heat_stress(temp, hum),
+                "feeder_pct": round(feeder, 1),
+                "feeder_status": _feeder_status(feeder),
+                "waterer_pct": round(waterer, 1),
+                "waterer_status": _waterer_status(waterer),
+                "h2s_ppm": round(h2s, 2),
+                "h2s_level": _classify_h2s(h2s),
+                "mold_risk_score": round(mold, 1),
+                "mold_risk_status": _classify_mold(mold),
+                "door_open": door_open,
+                "ventilation_on": ventilation_on,
+            },
+            int(round(inside)),
+            eggs,
+        )
 
 
 def generate_scenario_data(scenario: str = "normal"):
@@ -157,7 +160,7 @@ def generate_scenario_data(scenario: str = "normal"):
     }
     hour = hour_map.get(scenario, 10)
     ts = [datetime.now()]
-    reading = next(_make_timeline_state(ts))
+    reading, _chickens, _eggs = next(_make_timeline_state(ts))
 
     # Override numeric values to hit the desired scenario range
     if scenario == "hot_day":
@@ -213,8 +216,9 @@ def generate_24h_timeline():
     now = datetime.now()
     timestamps = _build_timestamps(now, days_back=1, step_minutes_bulk=15)
     total = len(timestamps)
-    for i, reading in enumerate(_make_timeline_state(timestamps), 1):
+    for i, (reading, chickens, eggs) in enumerate(_make_timeline_state(timestamps), 1):
         insert_sensor_reading(reading)
+        insert_cv_count(chickens, eggs)
         if i % 20 == 0:
             print(f"  Progress: {i}/{total}", end='\r')
     print(f"\n[OK] Added {total} sensor readings")
@@ -249,8 +253,9 @@ def generate_7d_timeline():
             timestamps.append(ts)
 
     total = len(timestamps)
-    for i, reading in enumerate(_make_timeline_state(timestamps), 1):
+    for i, (reading, chickens, eggs) in enumerate(_make_timeline_state(timestamps), 1):
         insert_sensor_reading(reading)
+        insert_cv_count(chickens, eggs)
         if i % 50 == 0:
             print(f"  Progress: {i}/{total}", end='\r')
     print(f"\n[OK] Added {total} sensor readings")
@@ -275,6 +280,7 @@ def generate_simple_test_data():
         sensor_data = generate_scenario_data(scenario)
         sensor_data['timestamp'] = timestamp
         insert_sensor_reading(sensor_data)
+        insert_cv_count(random.randint(8, 12), random.randint(0, 5))
         print(f"  [OK] {scenario.ljust(12)} @ {timestamp.strftime('%H:%M')}")
 
     print("[OK] Test data ready")
@@ -302,7 +308,7 @@ def show_latest_reading():
     print(f"Heat Stress: {latest['heat_stress_index']}")
     print(f"Feeder: {latest['feeder_status']} ({latest.get('feeder_pct', 'N/A')}%)")
     print(f"Waterer: {latest['waterer_status']} ({latest.get('waterer_pct', 'N/A')}%)")
-    print(f"Chickens inside: {latest.get('chickens_inside', 'N/A')}")
+    print(f"Chickens inside: {latest.get('number_of_chickens', latest.get('chickens_inside', 'N/A'))}")
     print(f"Egg count: {latest.get('egg_count', 'N/A')}")
     print(f"H2S: {latest.get('h2s_ppm', 'N/A')} ppm [{latest.get('h2s_level', 'N/A')}]")
     print(f"Mold risk: {latest.get('mold_risk_score', 'N/A')} [{latest.get('mold_risk_status', 'N/A')}]")

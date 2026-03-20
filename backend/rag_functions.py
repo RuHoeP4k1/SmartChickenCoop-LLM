@@ -8,7 +8,7 @@ import re
 import json
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,7 +24,10 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
 
 from backend.prompts import get_prompt
-from backend.sensor_filter import should_include_sensors, get_sensor_context, get_critical_alerts, is_environment_query
+from backend.sensor_filter import (
+    should_include_sensors, get_sensor_context, get_critical_alerts,
+    is_environment_query, is_reading_stale, llm_route_sensors,
+)
 from backend.db_utils import get_latest_sensor_reading
 
 
@@ -537,11 +540,20 @@ def answer_query(
     if use_sensors:
         if sensor_data is None:
             sensor_data = get_latest_sensor_reading()
-        if sensor_data and should_include_sensors(query, sensor_data):
-            sensor_context = get_sensor_context(sensor_data)
+        if sensor_data and not is_reading_stale(sensor_data):
+            # Critical alert detection always runs (drives emergency prompt + frontend alerts)
             critical_alerts = get_critical_alerts(sensor_data)
-            # Emergency mode only when critical AND user is asking about their coop
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
+
+            # Routing: decide whether sensor context belongs in this query's prompt
+            routing_mode = os.getenv("SENSOR_ROUTING_MODE", "llm")
+            if routing_mode == "llm":
+                include = llm_route_sensors(query, sensor_data, model=llm_model)
+            else:
+                include = should_include_sensors(query, sensor_data)
+
+            if include:
+                sensor_context = get_sensor_context(sensor_data)
 
     # Step 2: Retrieve relevant documents
     if use_hybrid:
