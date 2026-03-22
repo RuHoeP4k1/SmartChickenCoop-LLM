@@ -43,7 +43,7 @@ sys.path.insert(0, _HERE)
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
 
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.metrics.g_eval.utils import Rubric
 from deepeval.metrics import GEval
@@ -59,28 +59,35 @@ from eval_config import ACTIONABILITY_CRITERIA, CORRECTNESS_CRITERIA
 
 
 # =============================================================================
-# AI JUDGE — Claude Haiku (same setup as evaluate_deepeval.py)
+# AI JUDGE — OpenRouter Llama 3.3 70B (consistent with sweep.py)
 # =============================================================================
 
-JUDGE_MODEL = os.getenv("CLAUDE_JUDGE_MODEL", "claude-haiku-4-5-20251001")
+JUDGE_MODEL = os.getenv("SWEEP_JUDGE_MODEL", "meta-llama/llama-3.3-70b-instruct")
 
 
-class ClaudeJudge(DeepEvalBaseLLM):
+class OpenRouterJudge(DeepEvalBaseLLM):
     def __init__(self, model_name: str = JUDGE_MODEL):
         self.model_name = model_name
-        self.model = ChatAnthropic(model=model_name, temperature=0)
+        self.model = ChatOpenAI(
+            model=model_name,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            temperature=0,
+            max_tokens=2048,
+        )
 
     def load_model(self):
         return self.model
 
     def generate(self, prompt: str) -> str:
-        return self.model.invoke(prompt).content
+        response = self.model.invoke(prompt)
+        return response.content if hasattr(response, "content") else str(response)
 
     async def a_generate(self, prompt: str) -> str:
         return self.generate(prompt)
 
     def get_model_name(self) -> str:
-        return f"Claude/{self.model_name}"
+        return f"OpenRouter/{self.model_name}"
 
 
 # =============================================================================
@@ -88,15 +95,17 @@ class ClaudeJudge(DeepEvalBaseLLM):
 # =============================================================================
 
 _ACTION_RUBRIC = [
-    Rubric(score_range=(0, 3), expected_outcome="Not actionable — vague generalities, nothing the user can act on, repeats the question."),
-    Rubric(score_range=(4, 6), expected_outcome="Somewhat actionable — at least one useful piece of info or step, but leaves important gaps the user must fill."),
-    Rubric(score_range=(7, 10), expected_outcome="Genuinely helpful — directly answers the question, user knows what to do next without searching further."),
+    Rubric(score_range=(0, 3), expected_outcome="Not actionable — vague generalities, nothing to act on, repeats the question, or just restates the problem."),
+    Rubric(score_range=(4, 5), expected_outcome="Partially actionable — contains some useful information but missing key specifics, overly hedged, or leaves important gaps the user must fill themselves."),
+    Rubric(score_range=(6, 7), expected_outcome="Helpful — answers the question clearly with at least one concrete action or specific fact; a hobby keeper can act on it, though minor gaps or hedging remain."),
+    Rubric(score_range=(8, 10), expected_outcome="Precisely actionable — directly targeted to the specific question, covers all key steps or facts with appropriate detail, calibrated to the user's actual situation, no significant gaps or unnecessary hedging. Reserve 9-10 for answers that are both complete AND notably well-tailored."),
 ]
 
 _CORRECT_RUBRIC = [
-    Rubric(score_range=(0, 3), expected_outcome="Incorrect or harmful — wrong facts, dangerous advice, contradicts poultry welfare practice."),
-    Rubric(score_range=(4, 6), expected_outcome="Mostly correct — core info is right but has a meaningful inaccuracy, omission, or is overly hedged."),
-    Rubric(score_range=(7, 10), expected_outcome="Correct and appropriate — accurate, safe, calibrated to question scope."),
+    Rubric(score_range=(0, 3), expected_outcome="Incorrect or harmful — contains wrong facts that could mislead a beginner, dangerous advice, or actively contradicts the reference answer or established poultry practice."),
+    Rubric(score_range=(4, 5), expected_outcome="Partially correct — the core claim is broadly right but misses important details present in the reference answer, contains a meaningful inaccuracy, or is so hedged it becomes unreliable."),
+    Rubric(score_range=(6, 7), expected_outcome="Correct — accurate and consistent with standard practice and the reference answer on main points; minor omissions or imprecisions acceptable, but nothing that would mislead the user."),
+    Rubric(score_range=(8, 10), expected_outcome="Fully correct — accurate, complete, aligns closely with the reference answer on all key points. Calibrated detail, no significant omissions or inaccuracies. Reserve 9-10 for answers that match both the facts AND the practical emphasis of the reference."),
 ]
 
 
@@ -218,6 +227,7 @@ def run_variant(
     for i, test in enumerate(questions, 1):
         question = test["question"]
         category = test["category"]
+        ground_truth = test.get("ground_truth", "")
 
         # Retrieve context (same pipeline as production)
         if use_hybrid and bm25_retriever is not None:
@@ -235,18 +245,37 @@ def run_variant(
         elapsed = time.time() - t0
 
         # Score with DeepEval G-Eval (AI judge)
-        test_case = LLMTestCase(input=question, actual_output=answer)
+        # expected_output passed here so correctness metric can compare against ground_truth
+        test_case = LLMTestCase(
+            input=question,
+            actual_output=answer,
+            expected_output=ground_truth,
+        )
 
-        actionability_metric.measure(test_case)
+        # Llama 70B via OpenRouter occasionally returns malformed JSON — retry once
+        for _attempt in range(2):
+            try:
+                actionability_metric.measure(test_case)
+                break
+            except (ValueError, Exception):
+                if _attempt == 1:
+                    raise
         action_score = actionability_metric.score
 
-        correctness_metric.measure(test_case)
+        for _attempt in range(2):
+            try:
+                correctness_metric.measure(test_case)
+                break
+            except (ValueError, Exception):
+                if _attempt == 1:
+                    raise
         correct_score = correctness_metric.score
 
         results.append({
             "variant": variant_name,
             "question": question,
             "category": category,
+            "ground_truth": ground_truth,
             "answer": answer,
             "time": round(elapsed, 2),
             "actionability": action_score,
@@ -263,11 +292,14 @@ def run_evaluation(
     n_questions: int = None,
     export_pairs: bool = False,
     k: int = 4,
-    use_hybrid: bool = False,
+    use_hybrid: bool = True,
     weights: list = None,
     llm_model: str = None,
     chunk_size: int = 1000,
 ):
+    if weights is None:
+        weights = [0.7, 0.3]  # matches sweep grid hybrid config
+
     KB_PATH    = os.path.join(_ROOT, "test_docs")
     CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
     RESULTS_DIR = os.path.join(_HERE, "results")
@@ -277,12 +309,12 @@ def run_evaluation(
     print("PROMPT VARIANT EVALUATION")
     print(f"  LLM:   {llm_model or os.getenv('OLLAMA_MODEL', 'smollm2:1.7b')}")
     print(f"  Judge: {JUDGE_MODEL}")
-    print(f"  k={k}  hybrid={use_hybrid}  chunk_size={chunk_size}")
+    print(f"  k={k}  hybrid={use_hybrid}  weights={weights}  chunk_size={chunk_size}")
     print("=" * 80)
 
     # ── DeepEval judge setup ─────────────────────────────────────────────────
     print("\nSetting up AI judge...")
-    judge = ClaudeJudge(model_name=JUDGE_MODEL)
+    judge = OpenRouterJudge(model_name=JUDGE_MODEL)
 
     actionability_metric = GEval(
         name="Actionability",
@@ -294,7 +326,11 @@ def run_evaluation(
     correctness_metric = GEval(
         name="Correctness",
         criteria=CORRECTNESS_CRITERIA,
-        evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
+        evaluation_params=[
+            LLMTestCaseParams.INPUT,
+            LLMTestCaseParams.ACTUAL_OUTPUT,
+            LLMTestCaseParams.EXPECTED_OUTPUT,  # judge sees ground_truth reference
+        ],
         model=judge,
         rubric=_CORRECT_RUBRIC,
     )
@@ -312,9 +348,9 @@ def run_evaluation(
     all_results: Dict[str, List[Dict]] = {}
 
     for variant_name, prompt_template in PROMPT_VARIANTS.items():
-        print(f"\n{'─' * 60}")
+        print(f"\n{'-' * 60}")
         print(f"Variant: {variant_name.upper()}")
-        print(f"{'─' * 60}")
+        print(f"{'-' * 60}")
         all_results[variant_name] = run_variant(
             variant_name, prompt_template, questions,
             vectordb, bm25,
@@ -329,7 +365,7 @@ def run_evaluation(
     print("SUMMARY  (DeepEval G-Eval, 0–1 scale)")
     print("=" * 80)
     print(f"{'Variant':<14} {'Actionability':>14} {'Correctness':>12}")
-    print("─" * 44)
+    print("-" * 44)
     for variant_name, results in all_results.items():
         n = len(results)
         avg_action  = sum(r["actionability"] for r in results) / n
@@ -402,8 +438,8 @@ if __name__ == "__main__":
                         help="Export pairwise JSON for human ranking")
     parser.add_argument("--k", type=int, default=4)
     parser.add_argument("--chunk-size", type=int, default=1000)
-    parser.add_argument("--hybrid", action="store_true",
-                        help="Use hybrid retrieval (BM25 + semantic) instead of pure semantic")
+    parser.add_argument("--no-hybrid", action="store_true",
+                        help="Disable hybrid retrieval (use pure semantic instead of 70/30)")
     parser.add_argument("--model", type=str, default=None,
                         help="LLM model override (e.g. openrouter/qwen/qwen3-8b)")
     args = parser.parse_args()
@@ -412,7 +448,7 @@ if __name__ == "__main__":
         n_questions=args.n_questions,
         export_pairs=args.export_pairs,
         k=args.k,
-        use_hybrid=args.hybrid,
+        use_hybrid=not args.no_hybrid,
         llm_model=args.model,
         chunk_size=args.chunk_size,
     )

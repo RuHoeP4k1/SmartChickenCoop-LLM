@@ -34,3 +34,10 @@ export async function getWeather() {
   if (!res.ok) throw new Error(`Weather request failed (${res.status})`)
   return res.json()
 }
+
+export async function getHeatmap() {
+  const res = await fetch('/heatmap/latest')
+  if (res.status === 404) return null  // no heatmap uploaded yet
+  if (!res.ok) throw new Error(`Heatmap request failed (${res.status})`)
+  return res.json()  // { url, filename, timestamp }
+}

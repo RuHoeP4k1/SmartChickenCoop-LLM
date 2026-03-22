@@ -9,6 +9,7 @@ services:
     volumes:
       - ./chroma_db:/app/chroma_db        # use existing local chroma_db directly
       - ./test_docs:/app/test_docs:ro     # knowledge base, read-only inside container
+      - ./uploads:/app/uploads            # heatmap images from CV pipeline
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

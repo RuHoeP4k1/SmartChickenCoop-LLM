@@ -73,13 +73,13 @@ def get_llm(model: str = None):
                 base_url="https://openrouter.ai/api/v1",
                 api_key=os.getenv("OPENROUTER_API_KEY"),
                 temperature=0.2,
-                max_tokens=400,
+                max_tokens=600,
             )
         else:
             _llm = OllamaLLM(
                 model=model,
                 temperature=0.2,      # low — factual advice needs consistency
-                num_predict=400,      # tight budget — forces concise answers
+                num_predict=600,
                 repeat_penalty=1.1,   # prevents small-model repetition loops
                 top_k=40,
                 top_p=0.9,
