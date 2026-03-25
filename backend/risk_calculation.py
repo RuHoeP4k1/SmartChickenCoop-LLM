@@ -8,6 +8,51 @@ from pydantic.dataclasses import dataclass
 from dataclasses import dataclass
 from math import exp, log
 from typing import Iterable, List, Optional
+
+#this layer is for reading in raw data from the supabase database
+
+import os
+from supabase import create_client, Client
+from typing import List, Dict, Any
+
+SUPABASE_URL = os.getenv("https://qdwofrcncjnhstbqegnj.supabase.co")
+SUPABASE_KEY = os.getenv("sb_publishable_5nKBAUpvEiD-E6diKaf6dA_jBSEb47Z")
+
+def get_supabase_client() -> Client:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Set SUPABASE_URL and SUPABASE_KEY environment variables")
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def fetch_recent_sensor_readings_from_supabase(
+    table_name: str = "sensor_readings",
+    hours_back: int = 1,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch recent sensor readings from Supabase.
+    
+    Returns rows with timestamp, temperature_c, humidity_pct, etc.
+    """
+    client = get_supabase_client()
+    
+    # Get current time in UTC for filtering
+    from datetime import datetime, timezone, timedelta
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+    cutoff_iso = cutoff_time.isoformat()
+    
+    response = (
+        client.table(table_name)
+        .select("*")
+        .gte("timestamp", cutoff_iso)  # >= cutoff time
+        .order("timestamp", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    
+    if getattr(response, "error", None):
+        raise RuntimeError(f"Supabase error: {response.error}")
+    
+    return response.data or []
 #=============================================================================
 # ADAPTER LAYER — translating raw data to risk inputs
 #=============================================================================
