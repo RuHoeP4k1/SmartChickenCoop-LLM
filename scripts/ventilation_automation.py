@@ -1,61 +1,499 @@
 """
-ventilation_controller.py  –  v4
-=================================
-Direct-inversion ventilation control for poultry housing.
-No dataclasses — all functions take plain arguments.
-No heater available: only a variable-speed fan.
+ventilation_system.py  —  Smart Chicken Coop (ChickenCoopComfort)
+==================================================================
+Single-file ventilation system. Run every 30 minutes via cron:
 
-Priority order (hard hierarchy)
---------------------------------
-  1. Gas safety    : CO2 floor always respected; H2S hard override
-  2. Heat stress   : T_in > T_max  → increase fan if outside is cooler
-  3. Moisture      : RH_in > RH_max → increase fan if outside is drier
-  4. Cold stress   : T_in < T_min  → reduce fan, but never below gas floor
+    */30 * * * *  cd /opt/coop && python ventilation_system.py >> logs/vent.log 2>&1
 
-Core idea — ratio inversion (no model needed after first cycle)
----------------------------------------------------------------
-Instead of correcting a ventilation rate, we invert the mass balance
-directly from the sensor reading:
+What happens each run
+---------------------
+  1. Check Supabase connection — abort with a clear message if it fails.
+  2. Read latest row from sensor_readings_colson.
+  3. Read latest bird count from cv_counts_colson.
+  4. Read setpoints from flock_config.
+  5. Score environmental risk (temp, humidity, H2S) → write to risk_assessments.
+     If risk is below threshold AND no H2S emergency → exit, fan stays off.
+  6. Fetch outdoor weather from Open-Meteo (cached 30 min in weather_cache).
+  7. Run ventilation control logic (ratio-inversion, no PI loop).
+  8. Command the fan actuator.
+  9. Write result to ventilation_log.
+  10. Persist controller state to vent_state.json for the next 30-min cycle.
 
-  VR_needed = VR_prev * (C_measured - C_ambient) / (C_target - C_ambient)
+Real Supabase tables used
+--------------------------
+  sensor_readings_colson   Live sensor data from Pi / ESP32
+    timestamp              freshness check
+    temperature_c          → T_in  [°C]
+    humidity_pct           → RH_in [%] converted to 0-1
+    h2s_ppm                → H2S_in [ppm]
+    h2s_level              text label, logged only
+    mold_risk_score        float, logged only
+    ventilation_on         bool, logged only
 
-If CO2 is 10% above target, we need 10% more airflow. No bird production
-model is involved — systematic model errors cannot accumulate.
+  cv_counts_colson         Bird count from computer-vision camera
+    timestamp
+    number_of_chickens     → n_birds used in heat/moisture calculations
+    egg_count              logged only
 
-On cold start (first cycle, no VR_prev) a model-based estimate seeds the
-first cycle only. After that sensors take over completely.
+  flock_config             Setpoints — edit in Supabase dashboard
+    active, bird_weight_kg,
+    T_min, T_max, RH_max,
+    H2S_warning, H2S_emergency,
+    vent_max_m3h, vent_min_m3h, max_slew_m3h
 
-Units
------
-  Ventilation : m3/h
-  Temperature : C
-  RH          : fraction 0–1
-  CO2, H2S    : ppm
-  Moisture    : g/s per bird
-  Heat        : W per bird
+  risk_assessments         Written by this script each cycle
+  ventilation_log          Written by this script on activation
+  weather_cache            One row, upserted by this script each cycle
+
+No CO2 sensor
+-------------
+  CO2 control is bypassed. When a CO2 sensor is added, map its column
+  to CO2_in and re-enable CO2 scoring in calculate_risk().
+
+Hardware limits
+---------------
+  vent_max : 150 m3/h  (set in flock_config, fallback hardcoded below)
+  vent_min : 0 m3/h    (no enforced minimum until spec is confirmed)
+
+Environment variables  (put in a .env file next to this script)
+--------------------------------------------------------------
+  SUPABASE_URL            https://xxxx.supabase.co
+  SUPABASE_KEY            your-service-role-key
+  COOP_LATITUDE           50.88   (update to your actual coop GPS location)
+  COOP_LONGITUDE          4.70
+  RISK_TRIGGER_THRESHOLD  0.45
+  VENT_STATE_FILE         vent_state.json
+
+Install
+-------
+  pip install supabase requests python-dotenv
+
+SQL for new tables
+------------------
+  See APPENDIX at the bottom of this file.
 """
 
+import json
+import logging
 import math
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+from supabase import create_client, Client
+
+# Load .env file if present (silently ignored if python-dotenv not installed)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger(__name__)
 
 
-# Physics helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DEFAULT_LATITUDE       = float(os.environ.get("COOP_LATITUDE",  "50.864403"))
+DEFAULT_LONGITUDE      = float(os.environ.get("COOP_LONGITUDE", "4.686699"))
+CACHE_MAX_AGE_MINUTES  = 30
+RISK_TRIGGER_THRESHOLD = float(os.environ.get("RISK_TRIGGER_THRESHOLD", "0.45"))
+STATE_FILE             = Path(os.environ.get("VENT_STATE_FILE", "vent_state.json"))
+OPEN_METEO_URL         = "https://api.open-meteo.com/v1/forecast"
+
+# Hardware fallbacks — override via flock_config table in Supabase
+VENT_MAX_FALLBACK      = 150.0   # m3/h — confirmed fan maximum
+VENT_MIN_FALLBACK      = 0.0    # m3/h — no minimum enforced yet
+
+# ── Column names for sensor_readings_colson ──────────────────────────────────
+# Update these constants if your Supabase column names ever change
+SENSOR_TABLE          = "sensor_readings_colson"
+SENSOR_COL_TIMESTAMP  = "timestamp"
+SENSOR_COL_TEMP       = "temperature_c"
+SENSOR_COL_HUMIDITY   = "humidity_pct"       # stored 0-100, converted to 0-1
+SENSOR_COL_H2S_PPM    = "h2s_ppm"
+SENSOR_COL_H2S_LEVEL  = "h2s_level"          # text label, logged only
+SENSOR_COL_MOLD_SCORE = "mold_risk_score"    # logged only
+SENSOR_COL_VENT_ON    = "ventilation_on"     # logged only
+
+# ── Column names for cv_counts_colson ────────────────────────────────────────
+BIRD_TABLE            = "cv_counts_colson"
+BIRD_COL_TIMESTAMP    = "timestamp"
+BIRD_COL_COUNT        = "number_of_chickens"
+BIRD_COL_EGGS         = "egg_count"           # logged only
+
+SENSOR_RANGES = {
+    "T_in":   (-15.0, 50.0),
+    "RH_in":  (0.001,  1.0),    # after /100 conversion
+    "H2S_in": (  0.0, 100.0),
+    "T_amb":  (-20.0, 45.0),
+    "RH_amb": (0.001,  1.0),
+}
 
 
-def absolute_humidity(T, RH):
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — SUPABASE CONNECTION  (with explicit connection check)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_db_client() -> Client:
     """
-    Absolute humidity [kg water / kg dry air].
-    Buck equation — same as your original code.
+    Create a Supabase client from environment variables.
+    Raises EnvironmentError immediately if credentials are missing.
     """
+    url = os.environ.get('https://qdwofrcncjnhstbqegnj.supabase.co')
+    key = os.environ.get('sb_publishable_5nKBAUpvEiD-E6diKaf6dA_jBSEb47Z')
+    if not url or not key:
+        raise EnvironmentError(
+            "\n"
+            "  SUPABASE_URL and SUPABASE_KEY are not set.\n"
+            "  Add them to a .env file next to this script:\n"
+            "\n"
+            "      SUPABASE_URL=https://xxxx.supabase.co\n"
+            "      SUPABASE_KEY=your-service-role-key\n"
+        )
+    return create_client(url, key)
+
+
+def check_connection(client: Client) -> bool:
+    """
+    Ping Supabase and verify every required table is reachable.
+    Logs a clear ✓ / ✗ status line for each table.
+    Returns True only when all tables respond — the main cycle
+    aborts immediately if this returns False.
+    """
+    log.info("─── Supabase connection check ───────────────────────────────")
+    required_tables = [
+        SENSOR_TABLE,
+        BIRD_TABLE,
+        "flock_config",
+    ]
+    all_ok = True
+    for table in required_tables:
+        try:
+            client.table(table).select("id").limit(1).execute()
+            log.info("  ✓  %-30s reachable", table)
+        except Exception as exc:
+            log.error("  ✗  %-30s FAILED: %s", table, exc)
+            all_ok = False
+
+    if all_ok:
+        log.info("─── All tables reachable — connection OK ────────────────────")
+    else:
+        log.error("─── Connection check FAILED ─────────────────────────────────")
+        log.error("    Check SUPABASE_URL, SUPABASE_KEY, and that every table")
+        log.error("    listed above exists in schema 'public'.")
+    return all_ok
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — SUPABASE READ / WRITE HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def fetch_latest_sensor_reading(client: Client) -> dict:
+    """
+    Read the most recent row from sensor_readings_colson and normalise
+    column names to the internal convention used throughout this script.
+
+    Returned keys
+    -------------
+    T_in      float  °C
+    RH_in     float  0-1   (converted from humidity_pct stored as 0-100)
+    H2S_in    float  ppm
+    timestamp str
+    h2s_level str    text label (logged only)
+    mold_risk float  mold_risk_score (logged only)
+    vent_on   bool   ventilation_on flag from Supabase (logged only)
+    """
+    resp = (
+        client.table(SENSOR_TABLE)
+        .select("*")
+        .order(SENSOR_COL_TIMESTAMP, desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not resp.data:
+        raise ValueError(
+            f"Table '{SENSOR_TABLE}' returned no rows. "
+            "Check that your Pi / ESP32 is writing sensor data."
+        )
+    row = resp.data[0]
+    return {
+        "T_in":      float(row[SENSOR_COL_TEMP]),
+        "RH_in":     float(row[SENSOR_COL_HUMIDITY]) / 100.0,
+        "H2S_in":    float(row.get(SENSOR_COL_H2S_PPM) or 0.0),
+        "timestamp": str(row.get(SENSOR_COL_TIMESTAMP, "")),
+        "h2s_level": str(row.get(SENSOR_COL_H2S_LEVEL, "")),
+        "mold_risk": float(row.get(SENSOR_COL_MOLD_SCORE) or 0.0),
+        "vent_on":   bool(row.get(SENSOR_COL_VENT_ON, False)),
+    }
+
+
+def fetch_latest_bird_count(client: Client) -> dict:
+    """
+    Read the most recent row from cv_counts_colson.
+
+    Returned keys
+    -------------
+    n_birds   int   number_of_chickens  (used in heat/moisture calculations)
+    egg_count int   (logged only)
+    timestamp str
+    """
+    resp = (
+        client.table(BIRD_TABLE)
+        .select("*")
+        .order(BIRD_COL_TIMESTAMP, desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not resp.data:
+        log.warning(
+            "'%s' is empty — defaulting to 0 birds. "
+            "Heat/moisture calculations will be skipped until the camera feeds data.",
+            BIRD_TABLE,
+        )
+        return {"n_birds": 0, "egg_count": 0, "timestamp": ""}
+
+    row = resp.data[0]
+    return {
+        "n_birds":   int(row.get(BIRD_COL_COUNT) or 0),
+        "egg_count": int(row.get(BIRD_COL_EGGS)  or 0),
+        "timestamp": str(row.get(BIRD_COL_TIMESTAMP, "")),
+    }
+
+
+def fetch_flock_config(client: Client) -> dict:
+    """
+    Read the active row from flock_config.
+    Required columns: active, bird_weight_kg, T_min, T_max, RH_max,
+                      H2S_warning, H2S_emergency
+    Optional columns: vent_max_m3h, vent_min_m3h, max_slew_m3h
+    """
+    resp = (
+        client.table("flock_config")
+        .select("*")
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+    if not resp.data:
+        raise ValueError(
+            "No active row found in flock_config. "
+            "Add a row with active=true in the Supabase dashboard."
+        )
+    return resp.data[0]
+
+
+def fetch_cached_weather(client: Client) -> dict | None:
+    """Return the single cached weather row, or None if not yet populated."""
+    resp = (
+        client.table("weather_cache")
+        .select("*")
+        .order("fetched_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def upsert_weather_cache(client: Client, T_amb: float, RH_amb: float,
+                         description: str) -> None:
+    """Writes disabled — logs only. Re-enable when ready to persist weather."""
+    log.info("WRITE SUPPRESSED — weather_cache: %s", description)
+
+
+def insert_risk_assessment(client: Client, assessment: dict) -> None:
+    """Writes disabled — logs only. Re-enable when ready to persist risk scores."""
+    log.info("WRITE SUPPRESSED — risk_assessments: level=%s score=%.3f",
+             assessment.get("risk_level"), assessment.get("overall_score"))
+
+
+def insert_ventilation_log(client: Client, rate: float, diag: dict,
+                           risk_level: str, n_birds: int,
+                           T_amb: float, RH_amb: float) -> None:
+    """Writes disabled — logs only. Re-enable when ready to persist vent log."""
+    log.info("WRITE SUPPRESSED — ventilation_log: rate=%.0f m3/h  limiting=%s  risk=%s",
+             rate, diag.get("limiting"), risk_level)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — WEATHER  (Open-Meteo, free — no API key required)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_WMO_CODES = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Icy fog",
+    51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+    61: "Slight rain",   63: "Moderate rain",    65: "Heavy rain",
+    71: "Slight snow",   73: "Moderate snow",    75: "Heavy snow",
+    80: "Slight showers", 81: "Moderate showers", 82: "Violent showers",
+    95: "Thunderstorm",  96: "Thunderstorm + slight hail",
+    99: "Thunderstorm + heavy hail",
+}
+
+
+def fetch_weather(lat: float = DEFAULT_LATITUDE,
+                  lon: float = DEFAULT_LONGITUDE,
+                  timeout: int = 10) -> tuple[float, float, str]:
+    """
+    Call Open-Meteo current-conditions endpoint.
+    Returns (T_amb [°C], RH_amb [0-1], human-readable description).
+    No API key needed — completely free.
+    """
+    resp = requests.get(OPEN_METEO_URL, params={
+        "latitude":      lat,
+        "longitude":     lon,
+        "current":       "temperature_2m,relative_humidity_2m,weather_code",
+        "forecast_days": 1,
+    }, timeout=timeout)
+    resp.raise_for_status()
+    current     = resp.json().get("current", {})
+    T_amb       = float(current["temperature_2m"])
+    RH_amb      = float(current["relative_humidity_2m"]) / 100.0
+    code        = current.get("weather_code", -1)
+    description = (
+        f"{_WMO_CODES.get(code, f'Code {code}')} "
+        f"| T={T_amb:.1f}°C RH={RH_amb*100:.0f}%"
+    )
+    log.info("Weather fetched from Open-Meteo: %s", description)
+    return T_amb, RH_amb, description
+
+
+def get_ambient_conditions(client: Client,
+                            lat: float = DEFAULT_LATITUDE,
+                            lon: float = DEFAULT_LONGITUDE) -> tuple[float, float]:
+    """
+    Return (T_amb [°C], RH_amb [0-1]).
+
+    Uses the Supabase weather_cache if the cached value is younger than
+    CACHE_MAX_AGE_MINUTES (30 min). Otherwise fetches fresh data from
+    Open-Meteo and updates the cache. Falls back to stale cache on API error.
+    """
+    cached = fetch_cached_weather(client)
+    if cached:
+        fetched_at = datetime.fromisoformat(cached["fetched_at"])
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        age_min = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 60
+        if age_min < CACHE_MAX_AGE_MINUTES:
+            log.info("Weather: using Supabase cache (%.0f min old) — "
+                     "T=%.1f°C RH=%.0f%%", age_min,
+                     cached["T_amb"], cached["RH_amb"] * 100)
+            return float(cached["T_amb"]), float(cached["RH_amb"])
+
+    try:
+        T_amb, RH_amb, description = fetch_weather(lat=lat, lon=lon)
+        upsert_weather_cache(client, T_amb, RH_amb, description)
+        return T_amb, RH_amb
+    except Exception as exc:
+        log.warning("Weather API failed (%s) — falling back to stale cache", exc)
+        if cached:
+            return float(cached["T_amb"]), float(cached["RH_amb"])
+        raise RuntimeError(
+            "Weather unavailable and no cache exists. "
+            "Check internet connection and COOP_LATITUDE / COOP_LONGITUDE."
+        ) from exc
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 — RISK CALCULATOR  (gates ventilation on/off)
+# ═══════════════════════════════════════════════════════════════════════════════
+#dit stuk wordt ultiem dan nog aangepast om de trigger naar het risk calculation script te zetten
+def _ramp(value: float, safe: float, warn: float, critical: float,
+          direction: str = "high") -> float:
+    """
+    Piecewise linear risk score 0-1.
+      0.0  = within safe bounds
+      0.5  = at warning level
+      1.0  = at or beyond critical level
+    direction='low' flips the scale (used for cold-stress scoring).
+    """
+    if direction == "low":
+        value, safe, warn, critical = -value, -safe, -warn, -critical
+    if value <= safe:     return 0.0
+    if value >= critical: return 1.0
+    if value <= warn:
+        return 0.5 * (value - safe) / (warn - safe)
+    return 0.5 + 0.5 * (value - warn) / (critical - warn)
+
+
+def calculate_risk(sensor: dict, config: dict) -> dict:
+    """
+    Score temperature, humidity and H2S risk dimensions (each 0-1).
+    CO2 scoring omitted — no sensor installed yet.
+
+    overall_score = max across all dimensions (worst-case logic).
+    ventilation_needed = True when overall_score >= RISK_TRIGGER_THRESHOLD.
+
+    Returns a dict ready to insert into risk_assessments.
+    """
+    r_rh  = _ramp(sensor["RH_in"],
+                  config["RH_max"],
+                  config["RH_max"] + 0.07,
+                  config["RH_max"] + 0.15,  "high")
+
+    r_th  = _ramp(sensor["T_in"],
+                  config["T_max"],
+                  config["T_max"] + 1.5,
+                  config["T_max"] + 4.0,    "high")
+
+    r_tl  = _ramp(sensor["T_in"],
+                  config["T_min"],
+                  config["T_min"] - 2.0,
+                  config["T_min"] - 5.0,    "low")
+
+    r_h2s = _ramp(sensor["H2S_in"],
+                  0.0,
+                  config["H2S_warning"],
+                  config["H2S_emergency"],   "high")
+
+    temp_risk = max(r_th, r_tl)
+    overall   = max(r_rh, temp_risk, r_h2s)
+
+    if overall >= 0.85:   level = "critical"
+    elif overall >= 0.60: level = "high"
+    elif overall >= 0.35: level = "medium"
+    else:                 level = "low"
+
+    notes = []
+    if r_rh  > 0.4: notes.append(f"RH={sensor['RH_in']*100:.0f}% (risk={r_rh:.2f})")
+    if r_th  > 0.4: notes.append(f"T_high={sensor['T_in']:.1f}°C (risk={r_th:.2f})")
+    if r_tl  > 0.4: notes.append(f"T_low={sensor['T_in']:.1f}°C (risk={r_tl:.2f})")
+    if r_h2s > 0.1: notes.append(f"H2S={sensor['H2S_in']:.1f} ppm (risk={r_h2s:.2f})")
+
+    return {
+        "risk_level":         level,
+        "ventilation_needed": overall >= RISK_TRIGGER_THRESHOLD,
+        "rh_risk":            round(r_rh,      3),
+        "temp_risk":          round(temp_risk,  3),
+        "h2s_risk":           round(r_h2s,     3),
+        "overall_score":      round(overall,   3),
+        "notes":              " | ".join(notes) if notes else "All readings within safe range",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — PHYSICS HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def absolute_humidity(T: float, RH: float) -> float:
+    """Absolute humidity [kg water / kg dry air] — Buck equation."""
     Psat = 0.61121 * math.exp((18.678 - T / 234.5) * (T / (257.14 + T)))
     return 0.622 * (Psat * RH / (101.325 - Psat * RH))
 
 
-def air_density(T):
+def air_density(T: float) -> float:
     """Dry air density [kg/m3]."""
     return 353.0 / (T + 273.15)
 
 
-def latent_heat_of_vaporisation(T):
+def latent_heat_of_vaporisation(T: float) -> float:
     """Latent heat [J/g] interpolated from lookup table."""
     temps  = [0,2,4,10,14,18,20,25,30,34,40,44,50,54,60,70,80,90,96]
     latent = [2500.9,2496.4,2491.2,2477.2,2467.7,2458.3,2453.5,2441.7,
@@ -68,22 +506,11 @@ def latent_heat_of_vaporisation(T):
             return latent[i] + (latent[i+1]-latent[i])*(T-temps[i])/(temps[i+1]-temps[i])
 
 
-def bird_heat_production(W, T):
+def bird_heat_production(W: float, T: float) -> tuple[float, float, float, float]:
     """
-    Heat and moisture production for one bird.
-    Your original formulas.
-
-    Parameters
-    ----------
-    W : body weight [kg]
-    T : indoor temperature [C]
-
-    Returns
-    -------
-    total_heat   [W]
-    sensible     [W]
-    latent       [W]
-    moisture     [g/s]
+    Heat and moisture for one bird.
+    W: body weight [kg]  T: indoor temperature [°C]
+    Returns: total [W], sensible [W], latent [W], moisture [g/s]
     """
     total    = 10.62 * (W ** 0.75)
     sensible = (0.61 * (1000 + 20*(20 - T) - 0.228*T**2)) * (total / 1000)
@@ -92,302 +519,212 @@ def bird_heat_production(W, T):
     return total, sensible, latent, moisture
 
 
-def co2_production_per_bird(W, T, RQ=0.9):
+def derive_per_bird_params(config: dict) -> dict:
+    """Derive q_sensible and m_water from flock_config values."""
+    W     = config.get("bird_weight_kg", 2.5)
+    T_ref = config.get("T_max", 22.0)
+    _, q_sens, _, m_water = bird_heat_production(W, T_ref)
+    return {"q_sensible": q_sens, "m_water_per_bird": m_water}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 7 — SENSOR VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def validate_sensors(T_in: float, RH_in: float, H2S_in: float,
+                     T_amb: float, RH_amb: float) -> tuple[list, dict]:
     """
-    CO2 production [L/day per bird].
-    Your original formula.
+    Check each channel against plausibility bounds from SENSOR_RANGES.
+    Returns (faults: list[str], valid: dict[str, bool]).
     """
-    total_heat = 10.62 * (W ** 0.75)
-    HP_kcal    = total_heat * 0.8598452279
-    return (HP_kcal * RQ) / (3.815 + 1.232 * RQ)
-
-
-
-# Sensor validation
-SENSOR_RANGES = {
-    "T_in":   (-15.0,  50.0),
-    "CO2_in": (300.0, 5000.0),
-    "RH_in":  (0.05,  1.0),
-    "T_amb":  (-20.0, 45.0),
-    "RH_amb": (0.05,  1.0),
-    "H2S_in": (0.0,   100.0),
-}
-
-def validate_sensors(T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in,
-                     ranges=None):
-    """
-    Check each sensor channel against plausibility bounds.
-
-    Returns
-    -------
-    faults : list of str
-        Names of channels outside their valid range.
-    valid  : dict {channel: bool}
-    """
-    r = ranges or SENSOR_RANGES
-    readings = {
-        "T_in":   T_in,
-        "CO2_in": CO2_in,
-        "RH_in":  RH_in,
-        "T_amb":  T_amb,
-        "RH_amb": RH_amb,
-        "H2S_in": H2S_in,
-    }
-    valid  = {ch: r[ch][0] <= v <= r[ch][1] for ch, v in readings.items()}
+    readings = {"T_in": T_in, "RH_in": RH_in, "H2S_in": H2S_in,
+                "T_amb": T_amb, "RH_amb": RH_amb}
+    valid  = {ch: SENSOR_RANGES[ch][0] <= v <= SENSOR_RANGES[ch][1]
+              for ch, v in readings.items()}
     faults = [ch for ch, ok in valid.items() if not ok]
     return faults, valid
 
 
-# Direct inversion functions
-
-
-def co2_seed_rate(n_birds, q_co2_Lday, CO2_target, CO2_ambient):
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 8 — DIRECT-INVERSION CONTROL FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+#hier zou eig ook nog een Co2 rate bij moeten maja we hebben daar geen sensor voor 
+def moisture_inversion_rate(prev_rate: float, AH_in: float,
+                             AH_target_max: float,
+                             AH_outdoor: float) -> tuple[float, bool]:
     """
-    Model-based CO2 ventilation estimate [m3/h] for cold start only.
-    After the first cycle use co2_inversion_rate() instead.
+    Required ventilation [m3/h] derived directly from the RH sensor.
+
+    VR_new = VR_prev * (AH_in - AH_outdoor) / (AH_target_max - AH_outdoor)
+
+    Returns (rate, impossible) where impossible=True means outdoor air is
+    already more humid than the indoor target — ventilation cannot help.
     """
-    q_m3h = (n_birds * q_co2_Lday) / (24 * 1000)
-    delta  = (CO2_target - CO2_ambient) * 1e-6
-    if delta <= 0:
-        return float('inf')
-    return q_m3h / delta
+    num = AH_in         - AH_outdoor
+    den = AH_target_max - AH_outdoor
+    if den <= 0: return 0.0, True
+    if num <= 0: return 0.0, False
+    return prev_rate * (num / den), False
 
 
-def co2_inversion_rate(prev_rate, CO2_measured, CO2_target, CO2_ambient):
+def temperature_inversion_rate(n_birds: int, q_sensible: float,
+                                T_target: float, T_amb: float) -> float:
     """
-    Required ventilation rate [m3/h] derived purely from the CO2 sensor.
+    Required ventilation [m3/h] to hold indoor temperature at T_target.
 
-    Derivation
-    ----------
-    At steady state:   VR * (C_in - C_amb) = Q_birds
-    Previous cycle:    Q_birds = VR_prev * (CO2_prev - C_amb)   [measured]
-    New rate needed:   VR_new  = Q_birds  / (CO2_target - C_amb)
-                               = VR_prev * (CO2_measured - C_amb)
-                                         / (CO2_target   - C_amb)
+    VR = Q_sensible_total / (rho * cp * (T_target - T_amb))
 
-    No bird model needed. If birds produce more CO2 than assumed,
-    the sensor reads higher and the rate scales up automatically.
-    """
-    numerator   = CO2_measured - CO2_ambient
-    denominator = CO2_target   - CO2_ambient
-    if denominator <= 0:
-        return float('inf')
-    if numerator <= 0:
-        # CO2 is at or below ambient — minimum ventilation is enough
-        return 0.0
-    return prev_rate * (numerator / denominator)
-
-
-def moisture_inversion_rate(prev_rate, AH_in, AH_target_max, AH_outdoor):
-    """
-    Required ventilation rate [m3/h] derived purely from the RH sensor.
-
-    Same ratio logic as CO2:
-      VR_new = VR_prev * (AH_in - AH_outdoor) / (AH_target_max - AH_outdoor)
-
-    Returns (rate, impossible) where impossible=True if outdoor air is
-    already more humid than the indoor target (nothing ventilation can do).
-    """
-    numerator   = AH_in         - AH_outdoor
-    denominator = AH_target_max - AH_outdoor
-    if denominator <= 0:
-        return 0.0, True    # outdoor too moist — ventilation can't help
-    if numerator <= 0:
-        return 0.0, False   # indoor already drier than target — no action needed
-    return prev_rate * (numerator / denominator), False
-
-
-def temperature_inversion_rate(n_birds, q_sensible, T_target, T_amb):
-    """
-    Required ventilation rate [m3/h] to hold indoor temperature at T_target.
-
-    Heat balance:  VR * rho * cp * (T_target - T_amb) = Q_sensible
-    => VR = Q_sensible / (rho * cp * (T_target - T_amb))
-
-    Returns 0 if T_amb >= T_target (ventilation would make things worse).
-    Note: this function still uses the bird model because temperature
-    depends on sensible heat production which cannot be directly inverted
-    from a single temperature sensor without knowing the previous rate
-    and the house thermal mass. For a 10-min cycle the steady-state
-    approximation is acceptable.
+    Returns 0 if outside air is already warmer than target
+    (ventilation would make things worse, not better).
     """
     delta_T = T_target - T_amb
-    if delta_T <= 0:
-        return 0.0
+    if delta_T <= 0: return 0.0
     rho = air_density(T_amb)
-    cp  = 1005.0   # J/(kg*K)
-    Q   = n_birds * q_sensible
-    return (Q / (rho * cp * delta_T)) * 3600   # m3/s -> m3/h
+    cp  = 1005.0   # J / (kg·K)
+    return (n_birds * q_sensible / (rho * cp * delta_T)) * 3600
 
 
-# Main control function
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 9 — MAIN CONTROL FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_ventilation_rate(
-    # ── Sensor inputs ──────────────────────────────────────────────────
-    T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in,
-    # ── Setpoints ──────────────────────────────────────────────────────
-    T_min, T_max, RH_max, CO2_target, CO2_ambient,
-    H2S_warning, H2S_emergency,
-    # ── Flock parameters (model — used only for cold start / temp) ─────
-    n_birds, q_sensible, q_co2_Lday, m_water_per_bird,
-    # ── Controller state (pass in, get back in returned dict) ──────────
-    prev_rate,          # m3/h — commanded rate from previous cycle
-    prev_valid,         # dict — last known good sensor values
-    initialised,        # bool — False on very first call
-    # ── Hardware limits ────────────────────────────────────────────────
-    vent_min=20.0,      # m3/h
-    vent_max=150,   # m3/h
-    max_slew=3000.0,    # m3/h per cycle
-):
+    # Sensor inputs (internal names — already normalised by the fetch functions)
+    T_in: float, RH_in: float, H2S_in: float,
+    T_amb: float, RH_amb: float,
+    # Setpoints
+    T_min: float, T_max: float, RH_max: float,
+    H2S_warning: float, H2S_emergency: float,
+    # Flock  (n_birds from cv_counts_colson, params derived from flock_config)
+    n_birds: int, q_sensible: float, m_water_per_bird: float,
+    # Controller state — pass the dict returned by the previous call
+    prev_rate: float, prev_valid: dict, initialised: bool,
+    # Hardware limits
+    vent_min: float = VENT_MIN_FALLBACK,
+    vent_max: float = VENT_MAX_FALLBACK,
+    max_slew: float = 50.0,
+) -> tuple[float, dict, dict]:
     """
-    Compute the ventilation rate for one control cycle.
+    Compute the ventilation rate for one 30-minute cycle.
 
-    Parameters
-    ----------
-    (see module docstring for units)
+    Priority hierarchy
+    ------------------
+      1. H2S emergency → slam fan to max immediately
+      2. H2S warning   → proportional boost on top of other needs
+      3. Heat stress   → increase fan if outside is cooler than inside
+      4. Moisture      → increase fan if outside is drier than inside
+      5. Cold stress   → reduce fan to vent_min
 
     Returns
     -------
-    rate          : float  — commanded ventilation rate [m3/h]
-    state         : dict   — updated controller state to pass into next call
-    diagnostics   : dict   — what drove this decision (for logging/display)
-
-    Example
-    -------
-    # First call
-    rate, state, diag = compute_ventilation_rate(
-        T_in=20.0, CO2_in=1800, RH_in=0.62, T_amb=12.0, RH_amb=0.55, H2S_in=0.0,
-        T_min=16, T_max=22, RH_max=0.70, CO2_target=2000, CO2_ambient=400,
-        H2S_warning=1.0, H2S_emergency=5.0,
-        n_birds=500, q_sensible=13.0, q_co2_Lday=3.8, m_water_per_bird=0.0046,
-        prev_rate=0.0, prev_valid={}, initialised=False,
-    )
-    actuator.set(rate)
-
-    # Every subsequent call — pass state back in
-    rate, state, diag = compute_ventilation_rate(..., **state)
+    rate        float — commanded ventilation rate [m3/h]
+    new_state   dict  — {prev_rate, prev_valid, initialised} for next call
+    diagnostics dict  — what drove the decision (logged + written to Supabase)
     """
-
     notes  = []
-    faults = []
 
-    # ── 1. Validate sensors, freeze faults ────────────────────────────
-    faults, valid = validate_sensors(T_in, CO2_in, RH_in, T_amb, RH_amb, H2S_in)
-
-    # Replace faulty readings with last known good values
-    readings = {"T_in": T_in, "CO2_in": CO2_in, "RH_in": RH_in,
-                "T_amb": T_amb, "RH_amb": RH_amb, "H2S_in": H2S_in}
+    # ── Validate sensors; substitute last-good values on any fault ────
+    faults, valid = validate_sensors(T_in, RH_in, H2S_in, T_amb, RH_amb)
+    readings = {"T_in": T_in, "RH_in": RH_in, "H2S_in": H2S_in,
+                "T_amb": T_amb, "RH_amb": RH_amb}
     for ch in faults:
         if ch in prev_valid:
             readings[ch] = prev_valid[ch]
-            notes.append(f"{ch} faulty — using last known value {prev_valid[ch]:.2f}")
+            notes.append(f"{ch} faulty — using last known value {prev_valid[ch]:.3f}")
         else:
             notes.append(f"{ch} faulty — no previous value, using raw reading")
 
-    # Update last-good store
-    new_prev_valid = dict(prev_valid)
-    for ch, ok in valid.items():
-        if ok:
-            new_prev_valid[ch] = readings[ch]
+    new_prev_valid = {**prev_valid,
+                      **{ch: readings[ch] for ch, ok in valid.items() if ok}}
 
-    # Unpack (possibly substituted) readings
-    T_in   = readings["T_in"]
-    CO2_in = readings["CO2_in"]
-    RH_in  = readings["RH_in"]
-    T_amb  = readings["T_amb"]
+    T_in   = readings["T_in"];   RH_in  = readings["RH_in"]
+    H2S_in = readings["H2S_in"]; T_amb  = readings["T_amb"]
     RH_amb = readings["RH_amb"]
-    H2S_in = readings["H2S_in"]
 
-    # ── 2. Cold start — seed prev_rate from model ──────────────────────
+    # ── Cold start: seed at vent_max/4 (conservative) ─────────────────
     cold_start = False
     if not initialised:
-        prev_rate  = co2_seed_rate(n_birds, q_co2_Lday, CO2_target, CO2_ambient)
-        prev_rate  = max(vent_min, min(prev_rate, vent_max))
+        prev_rate  = vent_max / 4.0
         cold_start = True
-        notes.append(f"Cold start: seeded from model at {prev_rate:.0f} m3/h")
+        notes.append(f"Cold start: seeded at {prev_rate:.0f} m3/h (vent_max / 4)")
 
-    # ── 3. Precompute humidity values ─────────────────────────────────
+    # ── Precompute absolute humidity values ───────────────────────────
     AH_in      = absolute_humidity(T_in,  RH_in)
     AH_out     = absolute_humidity(T_amb, RH_amb)
-    AH_tgt_max = absolute_humidity(T_in,  RH_max)   # AH ceiling at current T_in
+    AH_tgt_max = absolute_humidity(T_in,  RH_max)
 
-    # ── PRIORITY 1: Gas — CO2 and H2S ────────────────────────────────
-
-    # H2S emergency: drop everything, slam fan to max
+    # ── PRIORITY 1: H2S emergency — immediate full-speed override ─────
     if H2S_in >= H2S_emergency:
-        rate = vent_max
+        rate  = vent_max
         state = dict(prev_rate=rate, prev_valid=new_prev_valid, initialised=True)
         diag  = dict(limiting="H2S emergency", h2s_alert="emergency",
-                     vr_co2=rate, vr_moisture=0, vr_temp=0,
-                     rh_impossible=False, cold_start=cold_start,
-                     sensor_faults=faults, notes=notes+["H2S EMERGENCY — fan at maximum"])
+                     vr_moisture=0.0, vr_temp=0.0, rh_impossible=False,
+                     cold_start=cold_start, sensor_faults=faults,
+                     notes=notes + ["H2S EMERGENCY — fan at maximum"])
         return rate, state, diag
 
+    # ── PRIORITY 2: H2S warning ────────────────────────────────────────
     h2s_alert = "none"
+    h2s_boost = 0.0
     if H2S_in >= H2S_warning:
         h2s_alert = "warning"
-        notes.append(f"H2S warning ({H2S_in:.1f} ppm) — ventilation boosted")
+        h2s_boost = vent_max * 0.15 * (H2S_in - H2S_warning) / max(H2S_warning, 1e-9)
+        notes.append(f"H2S warning ({H2S_in:.1f} ppm) — boost +{h2s_boost:.0f} m3/h")
 
-    # CO2 ratio inversion
-    vr_co2 = co2_inversion_rate(prev_rate, CO2_in, CO2_target, CO2_ambient)
-    vr_co2 = max(vr_co2, vent_min)
-
-    # H2S warning: proportional additive boost on top of CO2 rate
-    if h2s_alert == "warning":
-        boost  = vent_max * 0.15 * (H2S_in - H2S_warning) / max(H2S_warning, 1e-9)
-        vr_co2 = min(vr_co2 + boost, vent_max)
-
-    # ── PRIORITY 2: Heat stress ────────────────────────────────────────
+    # ── PRIORITY 3: Heat stress ────────────────────────────────────────
     vr_temp = 0.0
     if T_in > T_max:
         if T_amb < T_in:
             vr_temp = temperature_inversion_rate(n_birds, q_sensible, T_max, T_amb)
-            notes.append(f"Heat stress: T_in={T_in:.1f}C — ventilating to cool")
+            notes.append(f"Heat stress: T_in={T_in:.1f}°C — ventilating to cool")
         else:
-            notes.append("Heat stress: outside warmer than inside — ventilation cannot cool")
+            notes.append("Heat stress: outside warmer than inside — fan cannot cool")
 
-    # ── PRIORITY 3: Moisture ───────────────────────────────────────────
-    vr_moisture  = 0.0
+    # ── PRIORITY 4: Moisture ───────────────────────────────────────────
+    vr_moisture   = 0.0
     rh_impossible = False
     if RH_in > RH_max:
         vr_moisture, rh_impossible = moisture_inversion_rate(
             prev_rate, AH_in, AH_tgt_max, AH_out)
         if rh_impossible:
-            notes.append("RH target unachievable: outdoor air too moist")
+            notes.append("RH target unachievable — outdoor air too moist")
             vr_moisture = 0.0
         else:
-            vr_moisture = max(vr_moisture, vent_min)
-            notes.append(f"Excess moisture: RH_in={RH_in:.2f} — ventilating to dry")
+            notes.append(
+                f"Excess moisture: RH_in={RH_in*100:.0f}% > RH_max={RH_max*100:.0f}%")
 
-    # ── Combine: highest need wins (gas is always the floor) ───────────
-    candidates = {"CO2/H2S": vr_co2, "Heat stress": vr_temp, "Moisture": vr_moisture}
-    limiting   = max(candidates, key=candidates.__getitem__)
-    target     = candidates[limiting]
-    target     = max(target, vr_co2)   # gas floor always enforced
+    # ── Combine: highest need wins, apply H2S boost on top ────────────
+    if vr_temp >= vr_moisture and vr_temp > 0:
+        limiting = "Heat stress"
+        target   = vr_temp
+    elif vr_moisture > 0:
+        limiting = "Moisture"
+        target   = vr_moisture
+    else:
+        limiting = "Baseline"
+        target   = vent_min
 
-    # ── PRIORITY 4: Cold stress — reduce fan but respect gas floor ─────
+    target = min(target + h2s_boost, vent_max)
+    if h2s_alert == "warning":
+        limiting = f"H2S warning + {limiting}"
+
+    # ── PRIORITY 5: Cold stress — reduce to vent_min ──────────────────
     if T_in < T_min:
-        target   = vr_co2          # reduce to gas minimum only
-        limiting = "CO2/H2S (cold-stress floor)"
-        notes.append(f"Cold stress: T_in={T_in:.1f}C < T_min={T_min:.1f}C — fan at gas-safety floor")
+        target   = vent_min
+        limiting = "Cold stress (fan at minimum)"
+        notes.append(
+            f"Cold stress: T_in={T_in:.1f}°C < T_min={T_min:.1f}°C — fan at minimum")
 
     # ── Slew rate limit ────────────────────────────────────────────────
-    delta  = max(-max_slew, min(target - prev_rate, max_slew))
-    rate   = max(vent_min, min(prev_rate + delta, vent_max))
+    delta = max(-max_slew, min(target - prev_rate, max_slew))
+    rate  = max(vent_min, min(prev_rate + delta, vent_max))
 
-    # ── Return rate + updated state + diagnostics ──────────────────────
-    state = dict(
-        prev_rate   = rate,
-        prev_valid  = new_prev_valid,
-        initialised = True,
-    )
-    diag = dict(
+    state = dict(prev_rate=rate, prev_valid=new_prev_valid, initialised=True)
+    diag  = dict(
         limiting      = limiting,
         h2s_alert     = h2s_alert,
-        vr_co2        = vr_co2,
-        vr_moisture   = vr_moisture,
-        vr_temp       = vr_temp,
+        vr_moisture   = round(vr_moisture, 1),
+        vr_temp       = round(vr_temp, 1),
         rh_impossible = rh_impossible,
         cold_start    = cold_start,
         sensor_faults = faults,
@@ -396,65 +733,103 @@ def compute_ventilation_rate(
     return rate, state, diag
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 10 — CONTROLLER STATE  (persisted between 30-min cron runs)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Demo
+def load_state() -> dict:
+    """Load controller state from disk, or return cold-start defaults."""
+    if STATE_FILE.exists():
+        try:
+            with STATE_FILE.open() as f:
+                state = json.load(f)
+            log.debug("State loaded: prev_rate=%.0f  initialised=%s",
+                      state.get("prev_rate", 0), state.get("initialised"))
+            return state
+        except (json.JSONDecodeError, KeyError) as exc:
+            log.warning("State file corrupt (%s) — cold start", exc)
+    return {"prev_rate": 0.0, "prev_valid": {}, "initialised": False}
+
+
+def save_state(state: dict) -> None:
+    """Persist controller state to disk for the next cycle."""
+    with STATE_FILE.open("w") as f:
+        json.dump(state, f, indent=2)
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    run_ventilation_cycle()
 
-    # Per-bird production from your original formulas
-    W, T_ref = 3.0, 21.0
-    _, q_sens, _, m_water = bird_heat_production(W, T_ref)
-    q_co2 = co2_production_per_bird(W, T_ref)
 
-    print(f"Per-bird: sensible={q_sens:.2f} W  moisture={m_water:.4f} g/s  CO2={q_co2:.2f} L/day\n")
-
-    # Shared flock / setpoint args — unpack into every call
-    flock = dict(n_birds=500, q_sensible=q_sens, q_co2_Lday=q_co2, m_water_per_bird=m_water)
-    sp    = dict(T_min=16, T_max=22, RH_max=0.70, CO2_target=2000, CO2_ambient=400,
-                 H2S_warning=1.0, H2S_emergency=5.0)
-    hw    = dict(vent_min=50, vent_max=36000, max_slew=3000)
-
-    # Initial controller state
-    init_state = dict(prev_rate=0.0, prev_valid={}, initialised=False)
-
-    scenarios = [
-        ("Normal — CO2 slightly high",
-         dict(T_in=20.0, CO2_in=2200, RH_in=0.62, T_amb=12.0, RH_amb=0.55, H2S_in=0.0)),
-        ("Heat stress — outside cooler",
-         dict(T_in=24.5, CO2_in=1800, RH_in=0.60, T_amb=20.0, RH_amb=0.50, H2S_in=0.0)),
-        ("Heat stress — outside warmer",
-         dict(T_in=23.0, CO2_in=1700, RH_in=0.58, T_amb=26.0, RH_amb=0.45, H2S_in=0.0)),
-        ("Excess moisture",
-         dict(T_in=20.0, CO2_in=1600, RH_in=0.78, T_amb=14.0, RH_amb=0.88, H2S_in=0.0)),
-        ("Cold stress",
-         dict(T_in=14.0, CO2_in=1900, RH_in=0.65, T_amb=4.0,  RH_amb=0.60, H2S_in=0.0)),
-        ("H2S warning",
-         dict(T_in=20.0, CO2_in=1700, RH_in=0.60, T_amb=15.0, RH_amb=0.55, H2S_in=2.0)),
-        ("H2S emergency",
-         dict(T_in=20.0, CO2_in=1700, RH_in=0.60, T_amb=15.0, RH_amb=0.55, H2S_in=6.5)),
-        ("Faulty CO2 sensor",
-         dict(T_in=20.0, CO2_in=9999, RH_in=0.62, T_amb=12.0, RH_amb=0.55, H2S_in=0.0)),
-    ]
-
-    print(f"{'Scenario':<35} {'VR m3/h':>8}  {'Limiting':<30}  {'H2S':>10}")
-    print("-" * 90)
-    for name, sensors in scenarios:
-        rate, _, diag = compute_ventilation_rate(
-            **sensors, **sp, **flock, **hw, **init_state)
-        print(f"{name:<35} {rate:>8.0f}  {diag['limiting']:<30}  {diag['h2s_alert']:>10}")
-        for note in diag["notes"]:
-            print(f"  {'':35} {note}")
-        if diag["sensor_faults"]:
-            print(f"  {'':35} Faults: {diag['sensor_faults']}")
-
-    # Multi-cycle: CO2 drifting upward
-    print("\n=== Multi-cycle: CO2 rising — ratio inversion tracks it without a PI loop ===")
-    print(f"{'Cycle':<6} {'CO2_in':>8} {'VR m3/h':>9}  {'Limiting'}")
-    print("-" * 45)
-    state = dict(prev_rate=0.0, prev_valid={}, initialised=False)
-    for i in range(1, 10):
-        co2 = 1500 + i * 120
-        rate, state, diag = compute_ventilation_rate(
-            T_in=20.0, CO2_in=co2, RH_in=0.60, T_amb=12.0, RH_amb=0.55, H2S_in=0.0,
-            **sp, **flock, **hw, **state)
-        print(f"{i:<6} {co2:>8.0f} {rate:>9.0f}  {diag['limiting']}")
+# ═══════════════════════════════════════════════════════════════════════════════
+# APPENDIX — SQL for tables WRITTEN by this script
+# Run these once in the Supabase SQL editor.
+# Do NOT recreate sensor_readings_colson or cv_counts_colson — they already exist.
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# -- Setpoints and hardware limits (edit rows in the Supabase dashboard)
+# create table flock_config (
+#   id             bigserial primary key,
+#   active         boolean not null default true,
+#   bird_weight_kg float   default 2.5,
+#   T_min          float   default 16,      -- °C
+#   T_max          float   default 22,      -- °C
+#   RH_max         float   default 0.70,    -- fraction 0-1
+#   H2S_warning    float   default 1.0,     -- ppm
+#   H2S_emergency  float   default 5.0,     -- ppm
+#   vent_max_m3h   float   default 150,     -- confirmed fan maximum
+#   vent_min_m3h   float   default 0,       -- no minimum yet
+#   max_slew_m3h   float   default 50       -- max rate change per 30-min cycle
+# );
+# -- Insert your first config row:
+# insert into flock_config (active) values (true);
+#
+# -- Risk assessments — written every cycle
+# create table risk_assessments (
+#   id                 bigserial    primary key,
+#   created_at         timestamptz  default now(),
+#   risk_level         text         not null,
+#   ventilation_needed boolean      not null,
+#   rh_risk            float,
+#   temp_risk          float,
+#   h2s_risk           float,
+#   overall_score      float,
+#   notes              text
+# );
+#
+# -- Ventilation log — written on each activation
+# create table ventilation_log (
+#   id              bigserial    primary key,
+#   created_at      timestamptz  default now(),
+#   rate_m3h        float,
+#   limiting_factor text,
+#   vr_moisture     float,
+#   vr_temp         float,
+#   h2s_alert       text,
+#   sensor_faults   text,
+#   notes           text,
+#   risk_level      text,
+#   triggered_by    text,
+#   n_birds         int,
+#   T_amb           float,
+#   RH_amb_pct      float
+# );
+#
+# -- Weather cache — one row, upserted each cycle
+# create table weather_cache (
+#   id          int          primary key default 1,
+#   fetched_at  timestamptz,
+#   T_amb       float,
+#   RH_amb      float,
+#   description text,
+#   source      text
+# );
+#
+# -- Cron line (every 30 minutes):
+# -- */30 * * * *  cd /opt/coop && python ventilation_system.py >> logs/vent.log 2>&1
