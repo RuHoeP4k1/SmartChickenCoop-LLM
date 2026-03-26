@@ -7,7 +7,9 @@ import os
 import logging
 import httpx
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query
+from pathlib import Path
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -308,6 +310,43 @@ def get_weather():
         return resp.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Weather API error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Heatmap endpoints — CV pipeline on Pi pushes images here
+# ---------------------------------------------------------------------------
+
+_HEATMAP_DIR = Path("uploads/heatmaps")
+_HEATMAP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/heatmap/latest")
+async def get_latest_heatmap():
+    """Return the most recently uploaded heatmap image metadata, or 404 if none."""
+    images = list(_HEATMAP_DIR.glob("*.png")) + list(_HEATMAP_DIR.glob("*.jpg"))
+    if not images:
+        raise HTTPException(status_code=404, detail="No heatmap available yet")
+    latest = max(images, key=lambda f: f.stat().st_mtime)
+    return {
+        "url": f"/static/uploads/heatmaps/{latest.name}",
+        "filename": latest.name,
+        "timestamp": latest.stat().st_mtime,
+    }
+
+
+@app.post("/heatmap/upload")
+async def upload_heatmap(file: UploadFile = File(...)):
+    """Accept a heatmap image from the CV pipeline (Raspberry Pi)."""
+    ts = int(datetime.utcnow().timestamp())
+    filename = f"{ts}_{file.filename}"
+    dest = _HEATMAP_DIR / filename
+    dest.write_bytes(await file.read())
+    logger.info(f"Heatmap received: {filename}")
+    return {"url": f"/static/uploads/heatmaps/{filename}", "filename": filename}
+
+
+# Serve uploaded heatmap images as static files
+app.mount("/static/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 # ---------------------------------------------------------------------------

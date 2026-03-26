@@ -5,6 +5,36 @@ It serves as both a reference for teammates and a source for the final report.
 
 ---
 
+<!-- AUTO-GENERATED -->
+## Status — Round 1 Complete ✓
+
+**Experiment completed:** 2026-03-14 | **Configs run:** 24 (full factorial, 3 LLMs × 2 chunk sizes × 2 k values × 2 weight configs) | **Questions per config:** 30 | **Judge:** Llama 3.3 70B via OpenRouter
+
+### Winner Configuration
+
+| Factor | Value |
+|--------|-------|
+| LLM | `mistralai/ministral-14b-2512` via OpenRouter |
+| Chunk size | 1000 characters |
+| k (retrieved chunks) | 4 |
+| Hybrid weights | 70% BM25 / 30% semantic |
+| **Combined score** | **0.9667** (actionability: 0.990, correctness: 0.943) |
+
+### Key Findings
+
+- **LLM model is the only statistically significant factor** (ANOVA: F=34.85, p<0.0001). Chunk size, k, and weights do not significantly affect combined score at this scale.
+- Ministral-14b outperforms all other tested models by a large margin (+0.044 over mistral-small-24b, +0.044 over qwen3-8b on combined score).
+- Mixed-effects model confirms ministral-14b's advantage is robust after controlling for between-question variance (β=+0.030, p<0.001 on LLM Quality Composite).
+- Chunk size and k are significant only for **retrieval quality** (contextual recall), not for answer quality.
+- This project now runs ministral-14b-2512 via OpenRouter as production LLM. See `.env.example`.
+
+**Full analysis:** `evaluation/results/round1_analysis.md` | `evaluation/results/mixed_model_analysis.md`
+<!-- END AUTO-GENERATED -->
+
+---
+
+---
+
 ## 1. Why We Did This
 
 Our RAG pipeline has many configuration choices that were set to reasonable defaults

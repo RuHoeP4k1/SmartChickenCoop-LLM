@@ -30,6 +30,9 @@ MONITORING/
 mixed_model_analysis.md
 round1_analysis.md
 
+# Ranking app (standalone, not part of main repo)
+ranking_app/
+
 # Logs
 *.log
 

@@ -20,6 +20,9 @@ COPY . .
 # Drop the React build in from stage 1 (Node.js itself is discarded)
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
+# Ensure uploads directory exists with correct ownership before dropping privileges
+RUN mkdir -p /app/uploads/heatmaps
+
 # Non-root user — limits damage if something goes wrong inside the container
 RUN useradd -m appuser && chown -R appuser /app
 USER appuser

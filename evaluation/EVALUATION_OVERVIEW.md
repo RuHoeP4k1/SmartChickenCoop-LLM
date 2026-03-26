@@ -1,5 +1,23 @@
 # Evaluation Pipeline Overview
 
+<!-- AUTO-GENERATED -->
+## Current Status (as of 2026-03-22)
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| Phase 1 — Configuration sweep | `sweep.py` (24 configs × 30 questions) | **Complete** |
+| Phase 1 — Statistical analysis | `sweep_analysis.py`, `sweep_mixed_model.py` | **Complete** |
+| Phase 2 — Prompt variant scoring | `evaluate_prompt_variants.py` (G-Eval) | **Complete** |
+| Phase 2 — Human pairwise ranking | `human_ranking.py` | Pending |
+| Phase 2 — Sensor awareness | `evaluate_sensor_awareness.py` (19 scenarios) | **Complete** |
+
+**Production configuration** (from sweep winner): `mistralai/ministral-14b-2512`, chunk=1000, k=4, weights=70/30 (hybrid BM25/semantic).
+
+**Sensor awareness pass rate:** 16/19 (84.2%). Three scenarios fail: over-hedging on normal readings (S03), urgency miscalibration on encyclopedic questions (S11), and sensor context leaking into encyclopedic answers under H₂S-critical conditions (S13).
+<!-- END AUTO-GENERATED -->
+
+---
+
 ## Scripts — What Each One Tests
 
 | Script | Purpose | Metrics | Judge | When to Run |
