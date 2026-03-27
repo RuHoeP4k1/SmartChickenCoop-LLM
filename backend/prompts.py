@@ -34,46 +34,57 @@ Answer directly. Do not reproduce source labels, XML tags, or knowledge base str
 # =============================================================================
 # SIMPLE PROMPT — general or factual questions, no sensor data
 # =============================================================================
-# Use when: should_include_sensors() = False
+# Use when: sensor routing (LLM-based via llm_route_sensors) decides EXCLUDE
 #
 # No forced sections — let the model answer naturally and concisely.
 # Only bring up a vet when the question genuinely involves illness/injury.
 
 SIMPLE_PROMPT = """{safety_rules}
 
---- Reference knowledge (background information only) ---
+--- Reference knowledge ---
 {context}
---- End of reference knowledge ---
+--- End reference ---
 
 Question: {query}
 
-Answer helpfully and concisely based on the knowledge above.
-If this involves a sick or injured chicken, mention when a vet or experienced keeper should be contacted.
-Keep it short — a few sentences or a brief list is usually enough."""
+Provide a practical, structured answer:
+
+**The short answer:** State the core issue or action (1–2 sentences).
+
+**Steps to take:** List 2–3 key actions. Prioritise what matters most for *this* situation. Do not list all possible options — anticipate that the user will ask follow-up questions on any bullet point.
+
+**When to involve a vet or experienced keeper:** Only mention this if there is a genuine health, safety, or welfare concern.
+
+Keep language direct and actionable. Assume metric units (°C, kg, etc.). Do not reproduce source labels or knowledge base structure."""
 
 
 # =============================================================================
 # MAIN PROMPT — question with relevant sensor context (non-critical)
 # =============================================================================
-# Use when: should_include_sensors() = True, has_critical = False
+# Use when: sensor routing (LLM-based) decides INCLUDE, has_critical = False
 #
 # Sensor readings are already filtered to show only non-normal values,
 # so the block is compact. Integrate them naturally into the answer.
 
 MAIN_PROMPT = """{safety_rules}
 
---- Reference knowledge (background information only) ---
+--- Reference knowledge ---
 {context}
---- End of reference knowledge ---
+--- End reference ---
 
 {sensor_block}
 
 Question: {query}
 
-Answer based on the knowledge above and the current readings.
-Be direct and practical. Only mention a vet if there is a real health concern.
-Only describe what the sensor readings explicitly show — do not infer or fabricate animal behaviour that is not reported.
-Keep it short."""
+Provide a practical, structured answer:
+
+**The short answer:** State the core issue or action (1–2 sentences). Use current sensor readings to validate or anchor this claim to *what is happening right now*.
+
+**Steps to take:** List 2–3 key actions. Use sensor readings to prioritise what matters most for this *specific situation* — if temp is critical, focus there; if humidity is normal, deprioritise mold risk. Do not list all possible options — anticipate that the user will ask follow-up questions on any bullet point.
+
+**When to involve a vet or experienced keeper:** Only mention this if there is a genuine health, safety, or welfare concern. If critical readings are present, describe the urgency.
+
+Keep language direct and actionable. Assume metric units (°C, kg, etc.). Do not reproduce source labels or knowledge base structure."""
 
 
 # =============================================================================
@@ -86,19 +97,25 @@ Keep it short."""
 
 EMERGENCY_PROMPT = """{safety_rules}
 
-The coop sensors are showing a problem right now:
+**ALERT:** Your coop sensors are showing a problem right now:
 
 {sensor_block}
 
---- Reference knowledge (background information only) ---
+--- Reference knowledge (for context only) ---
 {context}
---- End of reference knowledge ---
+--- End reference ---
 
 Question: {query}
 
-Give 2-3 specific actions the keeper can take right now.
-Stay calm and practical. Mention a vet only if the chicken's health is genuinely at risk.
-Only describe what the sensor readings explicitly show — do not infer or fabricate animal behaviour (e.g. panting, lethargy) that is not reported."""
+**Immediate actions (do these now):**
+1. [Specific action tied directly to the critical reading]
+2. [Next priority action]
+3. [Safety step or observation to make]
+
+**When to call a vet or experienced keeper:**
+[Only if this critical reading poses immediate health/safety risk to the chickens]
+
+Stay calm. Act on what the sensors are telling you. Ask follow-up questions if you're unsure about any step."""
 
 
 # =============================================================================

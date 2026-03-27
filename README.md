@@ -11,9 +11,9 @@ Raspberry Pi ──serial──> sensor_readings (PostgreSQL)
                                 │
                                 ▼
 User ──> React (ChatPanel) ──> POST /ask ──> app.py
-                                              ├─ sensor_filter.py  → include sensors? (keyword or LLM routing)
-                                              ├─ rag_functions.py  → hybrid retrieval (70% BM25 / 30% semantic, k=4)
-                                              ├─ prompts.py        → select SIMPLE / MAIN / EMERGENCY template
+                                              ├─ sensor_filter.py  → include sensors? (LLM semantic routing)
+                                              ├─ rag_functions.py  → hybrid retrieval (60% semantic / 40% BM25, k=4)
+                                              ├─ prompts.py        → select SIMPLE / MAIN / EMERGENCY (hybrid design)
                                               ├─ LLM inference     → ministral-14b-2512 via OpenRouter
                                               ├─ db_utils.py       → log to event_log
                                               └─ return {answer, sources, sensor_included, has_critical}
@@ -115,37 +115,46 @@ python scripts/generate_demo_data.py
 
 ### Retrieval
 
-Hybrid retrieval via LangChain `EnsembleRetriever`:
-- **BM25** (70%) — exact term matching, ~0 ms, catches specific terminology
-- **Semantic** (30%) — ChromaDB cosine similarity via nomic-embed-text-v2-moe embeddings
+Hybrid retrieval via LangChain `EnsembleRetriever` (Phase 1 sweep winner config):
+- **Semantic** (70%) — ChromaDB cosine similarity via nomic-embed-text-v2-moe embeddings
+- **BM25** (30%) — exact term matching, ~0 ms, catches specific terminology
 
 Documents are chunked at 1000 characters with 120-char overlap. Chunks shorter than 50 characters are discarded. Context budget: 8000 characters max passed to the LLM.
 
 ### Sensor Context Injection
 
-`sensor_filter.py` decides whether to inject live sensor readings into the prompt. Two implementations are available:
+`sensor_filter.py` decides whether to inject live sensor readings into the prompt using **semantic LLM routing** (default).
 
-**Keyword filter** (`should_include_sensors`) — default, ~0 ms, no API cost:
-- 7 keyword sets covering situational queries, symptoms, air quality, resources, door/flock/egg status
-- Priority-ordered rules; `_GENERAL_KNOWLEDGE_SIGNALS` suppresses injection for encyclopedic questions
-- Readings older than 30 minutes are treated as stale and excluded
-
-**LLM classifier** (`llm_route_sensors`) — configurable via `SENSOR_ROUTER_MODEL`:
+**LLM classifier** (`llm_route_sensors`) — Phase 2 winner, production default:
 - Single-turn prompt to ministral-14b-2512, returns `INCLUDE` or `EXCLUDE`
+- Achieves **100% accuracy** (19/19 scenarios) vs keyword filter's 94.7% (18/19)
 - Latency: ~400–1100 ms | Cost: ~$0.00009/call
 - Falls back to keyword filter on parse error
+- Configurable via `SENSOR_ROUTER_MODEL` env var
 
+**Keyword filter** (`should_include_sensors`) — fallback, ~0 ms, no cost:
+- 7 keyword sets covering situational queries, symptoms, air quality, resources, door/flock/egg status
+- Priority-ordered rules; `_GENERAL_KNOWLEDGE_SIGNALS` suppresses injection for encyclopedic questions
+- Enabled by setting `SENSOR_ROUTING_MODE=keyword`
+
+Readings older than 30 minutes are treated as stale and excluded.
 `get_sensor_context()` reports only non-normal readings. Normal state returns `"All coop readings normal."` rather than silence.
 
 ### Prompt Selection
 
-| Condition | Template |
-|-----------|----------|
-| No sensor context needed | `SIMPLE_PROMPT` |
-| Sensor context available, no critical | `MAIN_PROMPT` |
-| Critical sensor alerts present | `EMERGENCY_PROMPT` |
+| Condition | Template | Design |
+|-----------|----------|--------|
+| Sensor routing decides EXCLUDE | `SIMPLE_PROMPT` | Structured (short answer → steps → vet decision) |
+| Sensor routing decides INCLUDE, no critical | `MAIN_PROMPT` | Sensor data validates/prioritises knowledge base claims |
+| Critical sensor alerts present | `EMERGENCY_PROMPT` | Critical reading leads; knowledge base supports actions only |
 
-LLM output budget: 400 tokens. No forced output structure in prompts (format-agnostic).
+**Hybrid Prompt Design** (Phase 2, 2026-03-27):
+- Combines structured layout (actionability) + conciseness (~800 tokens) + expert authority
+- Anticipates follow-up questions; does not pre-answer everything
+- Sensor data acts as specificity amplifier (validates which knowledge base claims are most relevant *right now*)
+- Format: markdown with bold, bullets, clear sections
+
+LLM output budget: 400 tokens max.
 
 ---
 
@@ -155,7 +164,7 @@ LLM output budget: 400 tokens. No forced output structure in prompts (format-agn
 
 Full-factorial sweep: 3 LLMs × 2 chunk sizes × 2 k values × 2 hybrid weight configs = 24 configurations, 30 questions each, scored by Llama 3.3 70B via OpenRouter (7 metrics: actionability, correctness, faithfulness, answer relevancy, contextual precision/recall/relevancy).
 
-**Winner:** `ministral-14b-2512` | chunk=1000 | k=4 | weights=70/30
+**Winner:** `ministral-14b-2512` | chunk=1000 | k=4 | weights=[0.7, 0.3] (70% semantic / 30% BM25)
 **Combined score:** 0.9667 (actionability: 0.990, correctness: 0.943)
 
 **Key finding:** LLM model is the only statistically significant factor (ANOVA F=34.85, p<0.0001). Chunk size and k are significant for retrieval quality but not for answer quality at this scale.
@@ -164,15 +173,22 @@ See `evaluation/SWEEP_README.md` and `evaluation/results/round1_analysis.md`.
 
 ### Phase 2 — Prompt Design + Sensor Awareness (complete)
 
-**Prompt variants** (`evaluate_prompt_variants.py`): 4 variants (baseline, structured, concise, expert) scored by DeepEval G-Eval (Actionability + Correctness via Claude Haiku). Human pairwise ranking pending.
+**Prompt variants** (complete, 2026-03-27): 4 variants (baseline, structured, concise, expert) evaluated via:
+- **G-Eval scoring** (DeepEval): Actionability + Correctness via Kimi 2.6 on 30 questions
+- **Human pairwise ranking**: 37 raters, 644 votes, 178 pairs rated (99% coverage)
+- **Mixed effects analysis**: random intercept per question to isolate variant effects
 
-**Sensor routing** (`compare_sensor_routing.py`): keyword filter vs LLM classifier on 3 scenarios — both correct on all 3. Keyword filter preferred in production (no latency, no cost).
+Winner: **`structured` variant** — 56.1% win rate (human), best actionability score (0.890 vs 0.827 baseline). New production prompt design combines all four variants' strengths (hybrid design).
 
-**Sensor awareness end-to-end** (`evaluate_sensor_awareness.py`): 19 scenarios across all sensor types.
-Pass rate: **16/19 (84.2%)**. Routing accuracy: **18/19 (94.7%)**.
-Three failure modes: over-hedging on normal readings (S03), urgency tone on encyclopedic questions (S11), H₂S critical overriding encyclopedic exclusion rule (S13).
+**Sensor routing comparison**: keyword filter vs LLM classifier on 19 scenarios:
+- **Keyword filter**: 18/19 (94.7%) — fails on S13 (H₂S critical + encyclopedic question)
+- **LLM classifier**: 19/19 (100%) — correctly reasons about question type vs sensor state
+- Production: **LLM routing is now default** (`SENSOR_ROUTING_MODE=llm`)
 
-See `evaluation/PHASE2_EVALUATION.md` and `evaluation/EVALUATION_OVERVIEW.md`.
+**Sensor awareness end-to-end**: 19 scenarios across all sensor types.
+Pass rate: **16/19 (84.2%)**. Three failure modes: over-hedging on normal (S03), urgency tone on encyclopedic (S11), H₂S critical overriding encyclopedic rule (S13 — now fixed by LLM routing).
+
+See `evaluation/PHASE2_EVALUATION.md` for full results, human ranking stats, and qualitative feedback.
 
 ---
 

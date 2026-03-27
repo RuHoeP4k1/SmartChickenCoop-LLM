@@ -360,7 +360,7 @@ def hybrid_search(
         bm25_retriever: BM25 retriever
         query: Search query
         k: Number of results to return
-        weights: [semantic_weight, bm25_weight], default [0.6, 0.4]
+        weights: [semantic_weight, bm25_weight], default [0.7, 0.3] (Phase 1 sweep winner)
         search_type: "mmr" or "similarity" for the semantic retriever
 
     Returns:
@@ -369,7 +369,7 @@ def hybrid_search(
     global _cached_ensemble, _cached_ensemble_key
 
     if weights is None:
-        weights = [0.6, 0.4]
+        weights = [0.7, 0.3]
 
     cache_key = (k, search_type, tuple(weights))
     if _cached_ensemble is None or _cached_ensemble_key != cache_key:
