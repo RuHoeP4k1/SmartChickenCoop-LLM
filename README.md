@@ -283,3 +283,31 @@ CREATE TABLE event_log (
 ```
 
 Status labels (`normal / warning / critical`) are set by the sensor team on the Raspberry Pi — this system consumes them without redefining thresholds.
+
+---
+
+## Production Deployment (Render)
+
+### Steps
+
+1. Push your code to GitHub.
+2. Go to [render.com](https://render.com) → **New Web Service** → connect your GitHub repo.
+3. Set **Build Command**: `cd frontend && npm install && npm run build`
+4. Set **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+5. Under **Environment**, add all required variables from `.env.example` (see [Environment Variables](#environment-variables) above).
+6. Click **Deploy**.
+
+### Free tier spin-down
+
+Render's free tier pauses the service after ~15 minutes of inactivity. Open `https://your-app.onrender.com/health` in a browser **at least 1 minute before a demo** to wake it up.
+
+### Custom domain
+
+1. Render dashboard → your service → **Settings** → **Custom Domains** → add your domain.
+2. In your DNS provider, add a `CNAME` record pointing your domain to the value Render shows (e.g. `your-app.onrender.com`).
+
+### Generate a secure API key
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```

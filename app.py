@@ -5,11 +5,13 @@ Run with: uvicorn app:app --reload
 
 import os
 import logging
+import secrets
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -99,13 +101,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow frontend on any origin during development
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# API key auth
+
+_API_KEY = os.getenv("API_KEY")
+if not _API_KEY:
+    logging.warning("API_KEY env var not set — POST /ask is unprotected")
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def verify_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    if not _API_KEY:
+        return  # no key configured → open for local dev
+    if not credentials or not secrets.compare_digest(credentials.credentials, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +182,7 @@ def health_check():
 
 
 @app.post("/ask", response_model=QueryResponse)
-def ask_question(request: QueryRequest):
+def ask_question(request: QueryRequest, _=Depends(verify_key)):
     """
     Ask a chicken-keeping question.
     Uses RAG pipeline with optional sensor context.

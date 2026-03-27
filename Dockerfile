@@ -4,6 +4,11 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
+# VITE_API_KEY is passed as a build arg so Vite can bake the value into the
+# React bundle at build time. Inject it at `docker build --build-arg VITE_API_KEY=…`
+# or via Render's "Environment" → "Build environment variables" panel.
+ARG VITE_API_KEY
+ENV VITE_API_KEY=$VITE_API_KEY
 RUN npm run build
 
 # ── Stage 2: Python backend + built frontend ────────────────────────────────
