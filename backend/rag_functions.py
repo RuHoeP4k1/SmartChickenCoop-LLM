@@ -245,7 +245,10 @@ def build_vector_store(
     embedding_model = get_embedding_model(embedding_model)
 
     # Reuse existing DB only if docs haven't changed
-    if os.path.exists(persist_dir) and not _needs_rebuild(persist_dir, folder_path):
+    chroma_exists = os.path.exists(persist_dir)
+    needs_rebuild = _needs_rebuild(persist_dir, folder_path) if chroma_exists else True
+    print(f"[RAG] chroma_db exists={chroma_exists}, needs_rebuild={needs_rebuild}, persist_dir={os.path.abspath(persist_dir)}")
+    if chroma_exists and not needs_rebuild:
         print(f"Loading existing vector database from {persist_dir} (docs unchanged)")
         vectordb = Chroma(
             persist_directory=persist_dir,
