@@ -41,3 +41,4 @@ ranking_app/
 # OS
 .DS_Store
 Thumbs.db
+reembed.py
