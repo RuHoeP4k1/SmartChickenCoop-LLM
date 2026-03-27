@@ -4,6 +4,7 @@ Run with: uvicorn app:app --reload
 """
 
 import os
+import asyncio
 import logging
 import secrets
 import httpx
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
     if os.path.exists(KNOWLEDGE_BASE_PATH):
         docs = load_documents(KNOWLEDGE_BASE_PATH)
         chunks = split_documents(docs)
-        state.vectordb = build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH)
+        state.vectordb = await asyncio.to_thread(lambda: build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH))
         state.bm25_retriever = build_bm25_retriever(chunks)
         state.ready = True
         logger.info(f"RAG pipeline ready ({len(chunks)} chunks)")
