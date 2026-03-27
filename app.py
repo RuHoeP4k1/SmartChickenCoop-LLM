@@ -54,29 +54,18 @@ COOP_LAT             = float(os.getenv("COOP_LAT", "50.8798"))
 COOP_LON             = float(os.getenv("COOP_LON", "4.7005"))
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Load knowledge base, build retrievers, start scheduler on startup."""
-    logger.info("Starting ChickenCare AI...")
-
-    # Ensure DB tables exist (safe to run every startup — uses IF NOT EXISTS)
-    try:
-        setup_database()
-    except Exception as e:
-        logger.warning(f"DB setup failed (is PostgreSQL running?): {e}")
-
-    # Build RAG pipeline once
-    if os.path.exists(KNOWLEDGE_BASE_PATH):
-        docs = load_documents(KNOWLEDGE_BASE_PATH)
-        chunks = split_documents(docs)
-        state.vectordb = await asyncio.to_thread(lambda: build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH))
-        state.bm25_retriever = build_bm25_retriever(chunks)
-        state.ready = True
-        logger.info(f"RAG pipeline ready ({len(chunks)} chunks)")
-    else:
+async def _build_rag_pipeline():
+    """Build RAG pipeline in the background so startup doesn't block the server."""
+    if not os.path.exists(KNOWLEDGE_BASE_PATH):
         logger.warning(f"Knowledge base path '{KNOWLEDGE_BASE_PATH}' not found.")
-
-    # Start background sensor monitoring
+        return
+    docs = load_documents(KNOWLEDGE_BASE_PATH)
+    chunks = split_documents(docs)
+    state.vectordb = await asyncio.to_thread(lambda: build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH))
+    state.bm25_retriever = build_bm25_retriever(chunks)
+    state.ready = True
+    logger.info(f"RAG pipeline ready ({len(chunks)} chunks)")
+    # Start scheduler once RAG is ready
     try:
         start_scheduler(
             interval_seconds=SCHEDULER_INTERVAL,
@@ -88,6 +77,21 @@ async def lifespan(app: FastAPI):
             logger.info("SIMULATION MODE ON — fake readings every 60 s, scheduler every %ds", SCHEDULER_INTERVAL)
     except Exception as e:
         logger.warning(f"Scheduler failed to start (DB might not be ready): {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start server immediately; build RAG pipeline in background."""
+    logger.info("Starting ChickenCare AI...")
+
+    # Ensure DB tables exist (safe to run every startup — uses IF NOT EXISTS)
+    try:
+        setup_database()
+    except Exception as e:
+        logger.warning(f"DB setup failed (is PostgreSQL running?): {e}")
+
+    # Fire RAG build in background — server starts serving immediately
+    asyncio.create_task(_build_rag_pipeline())
 
     yield
 
