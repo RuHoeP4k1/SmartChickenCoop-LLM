@@ -543,9 +543,10 @@ def answer_query(
     if use_sensors:
         if sensor_data is None:
             sensor_data = get_latest_sensor_reading()
-        if sensor_data and not is_reading_stale(sensor_data):
-            # Critical alert detection always runs (drives emergency prompt + frontend alerts)
-            critical_alerts = get_critical_alerts(sensor_data)
+        if sensor_data:
+            stale = is_reading_stale(sensor_data)
+            # Critical alerts only fire on fresh data (don't page on days-old readings)
+            critical_alerts = [] if stale else get_critical_alerts(sensor_data)
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
 
             # Routing: decide whether sensor context belongs in this query's prompt
