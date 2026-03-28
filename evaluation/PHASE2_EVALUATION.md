@@ -6,7 +6,7 @@
 | Axis | Status | Output file |
 |------|--------|-------------|
 | Axis 1 — Prompt variants (G-Eval scoring) | Complete | `results/prompt_variant_results.json` |
-| Axis 1 — Human pairwise ranking | Pending | `results/prompt_pairs.json` |
+| Axis 1 — Human pairwise ranking + mixed model analysis | Complete | `results/prompt_variant_mixed_model.md` |
 | Axis 2 — Sensor awareness end-to-end (19 scenarios, incl. routing scores) | Complete | `results/sensor_awareness_results.json` |
 | Axis 2 — Keyword vs LLM routing comparison (3 scenarios) | Complete | `results/sensor_routing_comparison.json` |
 
@@ -82,8 +82,97 @@ Four variants of the `SIMPLE_PROMPT` are tested (the most-used path — no live 
 
 Evaluation is done in two ways:
 
-1. **DeepEval G-Eval scoring** — Actionability + Correctness (AI judge via Claude Haiku). These measure LLM answer quality independent of retrieval.
-2. **Human pairwise preference** — blinded A vs B comparisons where raters don't know which variant they're seeing. Results are aggregated into win rates and ELO scores. This human evaluation method can be extended beyond only evaluating the different prompt variants ofc!
+1. **DeepEval G-Eval scoring** — Actionability + Correctness (AI judge via Kimi 2.6). These measure LLM answer quality independent of retrieval.
+2. **Human pairwise preference** — blinded A vs B comparisons where raters don't know which variant they're seeing. Results are aggregated into win rates and ELO scores per variant.
+
+### Human ranking methodology
+
+Raters evaluate **answer quality**, not factual correctness. The rating criteria are:
+- Clarity — is the answer easy to read and understand?
+- Structure — is it well-organised? Does formatting help or hurt?
+- Usefulness — would it help a chicken keeper take action?
+- Tone — appropriate level of urgency and detail?
+
+Raters are explicitly told they are **not** judging factual accuracy, but can leave a free-text comment on either answer if something concerns them.
+
+**Implementation:** a standalone web app (`ranking_app/`) built with FastAPI + React, shared via ngrok. Raters access it by name — their progress is saved to Supabase so they can close and resume across sessions. A/B assignment is randomised per `(rater_id, pair_id)` and resolved server-side so variant labels never reach the client.
+
+**ELO scoring:** all variants start at 1000. Each pairwise vote is treated as a match:
+
+```
+E_a = 1 / (1 + 10^((elo_b - elo_a) / 400))   # expected score for A
+elo_a += K * (actual - expected)               # K = 16
+```
+
+- A win → actual = 1, tie → 0.5, loss → 0
+- K = 16 (conservative factor for stable ratings) — appropriate for small N with multiple raters
+- A variant only climbs by beating strong opponents; beating weaker ones yields smaller gains
+- Starting ELO of 1000 is arbitrary; only relative differences matter
+
+Win rate is reported alongside ELO as a simpler cross-check. Both metrics should agree on ranking order; large divergence between them indicates uneven matchup distribution.
+
+To retrieve results: `python ranking_app/analyze.py` or `GET /results` on the ranking app backend.
+
+### Results — Human Ranking + Mixed Effects Analysis
+
+**Human preference ranking** (37 raters, 644 total votes across 178 rated pairs):
+
+| Variant | ELO Rating | Wins | Losses | Ties | Win Rate |
+|---------|-----------|------|--------|------|----------|
+| concise | 1033.4 | 138 | 150 | 25 | 44.1% |
+| structured | 1011.5 | 179 | 126 | 14 | 56.1% |
+| expert | 967.5 | 173 | 149 | 13 | 51.6% |
+| baseline | 987.6 | 117 | 182 | 22 | 36.4% |
+
+Human raters ranked `structured` highest (56.1% win rate), followed by `expert` (51.6%), with `baseline` weakest (36.4%). `concise` had highest ELO but lower win rate, indicating mixed strength across pairings.
+
+**G-Eval + human combined via linear mixed model** (random intercept per question, 30 questions × 4 variants = 120 observations). Formula: `score ~ C(variant) + (1|q_num)`.
+
+| Variant | Actionability | Correctness | Combined |
+|---------|---------------|------------|----------|
+| baseline | 0.827 | 0.657 | 0.742 |
+| concise | 0.863 | 0.693 | 0.778 |
+| expert | 0.867 | 0.757 | 0.812 |
+| structured | 0.890 | 0.743 | 0.817 |
+
+**Key findings:**
+
+1. **Human vs automated consensus:** Humans and G-Eval largely agree. `structured` wins on actionability (0.890 vs 0.827 baseline, p<0.001) and is human-ranked #1 by win rate (56.1%).
+2. **Actionability:** `structured` (+0.0633, p<0.001) significantly outperforms baseline. All variants improve on baseline; `structured` is best.
+3. **Correctness:** `expert` (+0.1000, p<0.001) and `structured` (+0.0867, p=0.003) both significantly outperform baseline. After Bonferroni correction, expert remains significant (p=0.004).
+4. **Combined score:** `expert` (+0.0700) and `structured` (+0.0750) both significantly better than baseline (p<0.001), even after correction. No significant difference between them (p=1.000).
+5. **Bad question detected:** Q8 ("Why did my chicken stop eating?") consistently scored lower (BLUP = −0.122, >1.5 SD below mean). Inherently difficult; may require specialized knowledge not well-covered in knowledge base.
+
+**Recommendation:** Adopt `structured` prompt. It achieves both the highest win rate from human raters (56.1%) and best actionability from G-Eval (0.890), while being simpler to maintain than `expert`. Statistical significance survives Bonferroni correction for multiple comparisons.
+
+### Qualitative insights from human raters
+
+**Why structured won:** Raters valued the explicit "short answer → steps → vet decision" layout. Markdown formatting (bullets, bold) improves scannability and helps users act immediately without reading the entire response.
+
+**Key limitation identified:** Generated answers were **too comprehensive**. When the LLM has broad knowledge (e.g., "what bedding should I use?"), it tends to list *all* options in exhaustive detail. Raters feedback: anticipate follow-up questions on bullet points rather than preemptively covering everything. Better pattern: **identify core issues → summarize top 2–3 actions → prompt user to ask for specifics** (e.g., "which of these is best for my wet climate?").
+
+**Critical evaluation gap:** These 30 questions were evaluated **without live sensor data**. The real production pipeline injects sensor readings when appropriate (temperature, humidity, resource levels, etc.). This evaluation measured RAG + prompt quality in isolation. **Full pipeline evaluation** (sensor routing + sensor-aware answer generation) would require:
+- Controlled sensor scenarios (we have 19 in Axis 2)
+- Eval criteria for sensor value citation and urgency calibration
+- Much broader permutation space (normal sensors × 4 prompt variants × 3 sensor scenarios = 12+; critical scenarios × variants = more)
+
+This explains why Axis 2 (sensor awareness) is a separate evaluation axis — the interaction between live data and prompt phrasing is complex enough to warrant its own test suite.
+
+**Next steps:** Design a new hybrid prompt combining all four variants' strengths. ✓ COMPLETED (2026-03-27)
+
+### Implementation: Hybrid Prompts + Semantic Routing
+
+**Prompts updated (2026-03-27):**
+- `SIMPLE_PROMPT` — structured layout, concise, anticipates follow-ups
+- `MAIN_PROMPT` — uses sensor data to validate/prioritise knowledge base claims
+- `EMERGENCY_PROMPT` — critical reading leads; knowledge base supports actions only
+
+**Sensor routing switched to semantic (LLM-based) classification** (2026-03-27):
+- Default routing mode: `SENSOR_ROUTING_MODE=llm` (already set in `rag_functions.py:549`)
+- Uses `llm_route_sensors()` — LLM classifier achieves 100% accuracy (19/19 scenarios) vs keyword filter's 94.7% (18/19)
+- Single failure in keyword approach (S13: H₂S critical + encyclopedic ammonia question) is now fixed by LLM classifier
+- Fallback: on LLM error, reverts to keyword routing (`should_include_sensors`)
+- Model configurable via `SENSOR_ROUTER_MODEL` env var (defaults to main LLM model)
 
 ---
 
@@ -148,20 +237,26 @@ This generates two files:
 
 ### Step 2 — Human pairwise ranking
 
-Each team member rates independently with their own rater ID:
+Ratings are collected via the standalone web app (`ranking_app/`). Start it with:
 
 ```bash
-python evaluation/human_ranking.py --rater-id romeo --n-pairs 20
-python evaluation/human_ranking.py --rater-id ruben --n-pairs 20
+# Terminal 1 — backend
+cd ranking_app && uvicorn main:app --reload --port 8001
+
+# Terminal 2 — frontend
+cd ranking_app/frontend && npm run dev -- --host
+
+# Terminal 3 — share via ngrok
+ngrok http --domain=unconsecrative-prorevision-lonny.ngrok-free.dev 5174
 ```
 
-View current standings at any time:
+Raters access the URL, enter their name, and rate pairs in a blinded interface. Progress is saved to Supabase — they can stop and resume at any time. A leaderboard is visible in-app.
+
+View aggregated results at any time:
 
 ```bash
-python evaluation/human_ranking.py --results
+python ranking_app/analyze.py
 ```
-
-Ratings are saved incrementally — you can stop and resume at any time.
 
 ### Step 3 — Sensor awareness evaluation
 

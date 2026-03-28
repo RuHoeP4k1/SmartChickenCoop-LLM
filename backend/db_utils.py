@@ -23,21 +23,30 @@ load_dotenv()
 # To switch back to local: clear DATABASE_URL (or comment it out).
 _DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if _DATABASE_URL:
-    # Hosted Postgres / Supabase — single connection string
-    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, dsn=_DATABASE_URL)
-    print(f"[DB] Connected via DATABASE_URL (Supabase / hosted Postgres)")
-else:
-    # Local Postgres — individual vars
-    DB_CONFIG = {
-        "host": os.getenv("DB_HOST", "localhost"),
-        "database": os.getenv("DB_NAME", "chickens"),
-        "user": os.getenv("DB_USER", "postgres"),
-        "password": os.getenv("DB_PASSWORD", ""),
-        "port": int(os.getenv("DB_PORT", "5432")),
-    }
-    _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
-    print(f"[DB] Connected to local Postgres ({DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']})")
+print("[DB] Initializing connection pool...")
+try:
+    if _DATABASE_URL:
+        # Hosted Postgres / Supabase — single connection string
+        # connect_timeout prevents blocking uvicorn startup if DB is unreachable
+        _dsn = _DATABASE_URL if "connect_timeout" in _DATABASE_URL else _DATABASE_URL + "?connect_timeout=5"
+        _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, dsn=_dsn)
+        print(f"[DB] Connected via DATABASE_URL (Supabase / hosted Postgres)")
+    else:
+        # Local Postgres — individual vars
+        DB_CONFIG = {
+            "host": os.getenv("DB_HOST", "localhost"),
+            "database": os.getenv("DB_NAME", "chickens"),
+            "user": os.getenv("DB_USER", "postgres"),
+            "password": os.getenv("DB_PASSWORD", ""),
+            "port": int(os.getenv("DB_PORT", "5432")),
+            "connect_timeout": 5,
+        }
+        _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, **DB_CONFIG)
+        print(f"[DB] Connected to local Postgres ({DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']})")
+except Exception as _db_init_err:
+    print(f"[DB] WARNING: Pool creation failed at import time: {_db_init_err}. DB calls will fail until reconnected.")
+    _pool = None
+print(f"[DB] Pool init complete. pool={'ok' if _pool else 'FAILED'}")
 
 atexit.register(lambda: _pool.closeall() if _pool and not _pool.closed else None)
 
@@ -48,6 +57,8 @@ def get_db_connection():
     IMPORTANT: callers must call release_db_connection(conn) when done
     instead of conn.close().
     """
+    if _pool is None:
+        raise RuntimeError("Database pool not initialized — check DB credentials/connectivity.")
     return _pool.getconn()
 
 

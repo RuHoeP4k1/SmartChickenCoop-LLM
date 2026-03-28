@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ChickenCoopComfort
+    runtime: docker
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: KNOWLEDGE_BASE_PATH
+        value: test_docs
+      - key: SIMULATION_MODE
+        value: false
+      - key: SCHEDULER_INTERVAL
+        value: 600
+      - key: COOP_LAT
+        value: 50.8798
+      - key: COOP_LON
+        value: 4.7005
+    buildEnv:
+      - key: VITE_API_KEY
+        sync: false

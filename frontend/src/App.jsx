@@ -10,18 +10,20 @@ import AutomationPanel from './components/AutomationPanel'
 import Weather from './components/Weather'
 import MyChickens from './components/MyChickens'
 import HeatmapView from './components/HeatmapView'
+import Packages from './components/Packages'
 
 const TABS = [
   { id: 'welcome',    label: 'Home' },
   { id: 'chat',       label: 'Chat' },
   { id: 'sensors',    label: 'Sensors' },
+  { id: 'heatmap',    label: 'Heatmap' },
   { id: 'charts',     label: 'Charts' },
   { id: 'alerts',     label: 'Alerts' },
   { id: 'eggs',       label: 'Egg Calendar' },
   { id: 'automation', label: 'Automation' },
   { id: 'weather',    label: 'Weather' },
   { id: 'chickens',   label: 'My Chickens' },
-  { id: 'heatmap',    label: 'Heatmap' },
+  { id: 'packages',   label: 'Packages' },
 ]
 
 export default function App() {
@@ -44,6 +46,7 @@ export default function App() {
       <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
       <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>
+      <div className={activeTab === 'packages'   ? 'h-full' : 'hidden'}><Packages /></div>
       <div className={activeTab === 'heatmap'    ? 'h-full' : 'hidden'}><HeatmapView /></div>
     </Layout>
   )
