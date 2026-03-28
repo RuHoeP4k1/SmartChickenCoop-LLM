@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from math import exp, log
 from typing import Iterable, List, Optional
 
-# this layer is for reading in raw data from the supabase database
+#=============================================================================
+# SUPABASE DATA FETCHING AND MAPPING
+# =============================================================================
 
 import os
 from supabase import create_client, Client
@@ -29,14 +31,15 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def fetch_latest_environment_reading(
+def fetch_recent_environment_readings(
     table_name: str = "sensor_readings",
-) -> Dict[str, Any]:
+    limit: int = 12,
+) -> List[Dict[str, Any]]:
     """
-    Fetch the latest valid raw environment row from Supabase.
+    Fetch recent valid environment rows from Supabase.
 
-    Returns:
-        A row containing timestamp, temperature_c, and humidity_pct.
+    Rows are returned newest first and only include the fields needed to
+    compute a THI series.
     """
     client = get_supabase_client()
 
@@ -47,7 +50,7 @@ def fetch_latest_environment_reading(
             .not_.is_("temperature_c", "null")
             .not_.is_("humidity_pct", "null")
             .order("timestamp", desc=True)
-            .limit(1)
+            .limit(limit)
             .execute()
         )
     except Exception as exc:
@@ -55,7 +58,14 @@ def fetch_latest_environment_reading(
             f"Failed to read from Supabase table '{table_name}': {exc}"
         ) from exc
 
-    rows = response.data or []
+    return list(response.data or [])
+
+
+def fetch_latest_environment_reading(
+    table_name: str = "sensor_readings",
+) -> Dict[str, Any]:
+    """Fetch the latest valid raw environment row from Supabase."""
+    rows = fetch_recent_environment_readings(table_name=table_name, limit=1)
     if not rows:
         raise ValueError(f"No valid row found in Supabase table '{table_name}'.")
 
@@ -79,42 +89,13 @@ def build_environment_inputs_from_supabase(
         raise ValueError(f"Missing required field in Supabase row: {exc.args[0]}") from exc
     except (TypeError, ValueError) as exc:
         raise ValueError("Invalid temperature_c or humidity_pct value in Supabase row.") from exc
+    
 #=============================================================================
-# ADAPTER LAYER — translating raw data to risk inputs
+# THI_SERIES CALCULATION
+# concept: 12 rijen worden opgehaald, dat is 2 uur aan data bij 10-minuten intervallen. 
+# Daarmee kan een THI-serie worden opgebouwd die de afgelopen 2 uur laat zien hoe de THI zich heeft ontwikkeld. 
+# Op basis van die serie kan worden berekend hoe lang de THI al boven een bepaalde drempelwaarde is gebleven, wat een belangrijke factor is voor het risico op hittestress bij kippen.
 #=============================================================================
-
-def _parse_timestamp(value: Any) -> Optional[datetime]:
-    """Parse datetime/ISO timestamp and return timezone-aware UTC datetime."""
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str):
-        normalized = value.strip().replace("Z", "+00:00")
-        try:
-            dt = datetime.fromisoformat(normalized)
-        except ValueError:
-            return None
-    else:
-        return None
-
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _sort_readings_newest_first(readings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Sort readings by timestamp descending.
-    Missing/invalid timestamps are treated as oldest.
-    """
-    oldest_utc = datetime.min.replace(tzinfo=timezone.utc)
-
-    def sort_key(row: Dict[str, Any]) -> tuple[int, datetime]:
-        ts = _parse_timestamp(row.get("timestamp"))
-        if ts is None:
-            return (0, oldest_utc)
-        return (1, ts)
-
-    return sorted(readings, key=sort_key, reverse=True)
 
 
 def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
@@ -123,27 +104,98 @@ def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
     return 0.85 * temp_c + 0.15 * twb
 
 
-def _build_thi_series(readings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Return valid THI points sorted newest first."""
+def _calculate_thi_streak_bonus(
+    thi: float,
+    thi_streak_minutes: int,
+    streak_thi_threshold: float,
+    streak_threshold_minutes: int,
+    streak_max_bonus: float,
+    streak_base_bonus_at_threshold: float,
+    streak_growth_rate: float,
+) -> float:
+    """
+    Compute a bounded exponential-like bonus for sustained THI exposure.
+
+    The bonus starts at `streak_base_bonus_at_threshold` once the minimum streak
+    duration is reached and then approaches `streak_max_bonus`.
+    """
+    if thi < streak_thi_threshold:
+        return 0.0
+    if thi_streak_minutes < streak_threshold_minutes:
+        return 0.0
+    if streak_max_bonus <= 0:
+        return 0.0
+
+    base_bonus = max(0.0, min(streak_base_bonus_at_threshold, streak_max_bonus))
+    extra_minutes = max(0, thi_streak_minutes - streak_threshold_minutes)
+    remaining_bonus = max(0.0, streak_max_bonus - base_bonus)
+    growth_factor = 1.0 - math.exp(-streak_growth_rate * extra_minutes)
+    bonus = base_bonus + remaining_bonus * growth_factor
+    return min(bonus, streak_max_bonus)
+
+
+def build_thi_series_from_readings(
+    readings: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Build a THI series from Supabase readings.
+
+    The function assumes the readings are already ordered newest first by the
+    Supabase query.
+    """
     thi_series: List[Dict[str, Any]] = []
-    for row in _sort_readings_newest_first(readings):
-        timestamp = _parse_timestamp(row.get("timestamp"))
+    for row in readings:
+        timestamp = row.get("timestamp")
         temperature_c = row.get("temperature_c")
         humidity_pct = row.get("humidity_pct")
+
         if timestamp is None or temperature_c is None or humidity_pct is None:
+            continue
+
+        try:
+            temperature_value = float(temperature_c)
+            humidity_value = float(humidity_pct)
+        except (TypeError, ValueError):
             continue
 
         thi_series.append(
             {
                 "timestamp": timestamp,
-                "thi": _calculate_thi(float(temperature_c), float(humidity_pct)),
-                "row": row,
+                "temperature_c": temperature_value,
+                "humidity_pct": humidity_value,
+                "thi": _calculate_thi(temperature_value, humidity_value),
             }
         )
     return thi_series
 
+
+def calculate_thi_streak_minutes(
+    thi_series: List[Dict[str, Any]],
+    thi_threshold: float,
+    interval_minutes: int = 10,
+) -> int:
+    """
+    Calculate how long THI has continuously stayed above a threshold.
+
+    The input series is expected to be ordered newest first.
+    """
+    consecutive_rows = 0
+
+    for point in thi_series:
+        thi_value = point.get("thi")
+        if thi_value is None or float(thi_value) < thi_threshold:
+            break
+        consecutive_rows += 1
+
+    return consecutive_rows * interval_minutes
+
+
+def _build_thi_series(readings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Backward-compatible wrapper for THI series construction."""
+    return build_thi_series_from_readings(readings)
+
 #=============================================================================
-#WET BULP CALCULATION
+# helper functions
 #=============================================================================
 def wet_bulb_temperature_c(t_db_c: float, rh_percent: float) -> float:
     """
@@ -164,18 +216,32 @@ def wet_bulb_temperature_c(t_db_c: float, rh_percent: float) -> float:
         - 4.686035
     )
     return twb
+
+#=============================================================================
+# HEAT RISK CALCULATION FUNCTION
+#=============================================================================
+
 def compute_heat_risk(
     temperature_c: float,
     humidity_pct: float,
+    thi_streak_minutes: int = 0,
+    streak_thi_threshold: float = 25.0, #vanaf hier zijn alle variabelen voor de streak
+    streak_threshold_minutes: int = 30, # vanaf hier begint de bonus te lopen
+    streak_max_bonus: float = 0.20, # maximale bonus die kan worden bereikt door een lange streak
+    streak_base_bonus_at_threshold: float = 0.05, # bonus die al wordt toegekend zodra de streak drempel is bereikt (bijv. 30 minuten boven 25°C)
+    streak_growth_rate: float = 0.06, # bepaalt hoe snel de bonus groeit met extra minuten boven de drempel. Hogere waarde = snellere groei richting max bonus.
 ) -> Dict[str, Any]:
     if not 0 <= humidity_pct <= 100:
         raise ValueError("humidity_pct must be between 0 and 100")
+    if thi_streak_minutes < 0:
+        raise ValueError("thi_streak_minutes must be non-negative")
 
     score = 0.0
     contributing_factors: List[str] = []
 
     thi = _calculate_thi(temperature_c, humidity_pct)
 
+# De score wordt bepaald door de huidige THI-waarde, met hogere scores voor hogere THI.
     if thi < 19:
         score = 0.0
         contributing_factors.append("THI within safe range")
@@ -197,6 +263,26 @@ def compute_heat_risk(
     else:
         score = 1.0
         contributing_factors.append("THI extreme")
+
+    streak_bonus = _calculate_thi_streak_bonus(
+        thi=thi,
+        thi_streak_minutes=thi_streak_minutes,
+        streak_thi_threshold=streak_thi_threshold,
+        streak_threshold_minutes=streak_threshold_minutes,
+        streak_max_bonus=streak_max_bonus,
+        streak_base_bonus_at_threshold=streak_base_bonus_at_threshold,
+        streak_growth_rate=streak_growth_rate,
+    )
+
+    if streak_bonus > 0:
+        score += streak_bonus
+        contributing_factors.append(
+            "Sustained THI exposure: THI >= "
+            f"{streak_thi_threshold:.1f} for {thi_streak_minutes} minutes "
+            f"(+{streak_bonus:.2f} score)"
+        )
+
+    score = max(0.0, min(score, 1.0))
 
     if score < 0.5:
         level = "LOW - Monitor"
@@ -476,171 +562,3 @@ def mean_m(results: List[VTTStepResult]) -> float:
         return 0.0
     return sum(r.m for r in results) / len(results)
 
-# =========================================================
-# 1. SIMULATIE EN VISUALISATIE VAN EEN COMPLEX 1-WEEK SCENARIO
-# =========================================================
-
-def generate_proof_of_concept_week(params: VTTOriginalParams):
-    """
-    Maakt een 1-week scenario met:
-    - verschillende fasen
-    - dag/nacht-variatie in temperatuur en RH
-    - periodes van groei en decline
-    """
-    steps_per_hour = 60 // params.sample_minutes
-    steps_per_day = 24 * steps_per_hour
-    total_days = 7
-    n_steps = total_days * steps_per_day
-
-    temperatures = []
-    rhs = []
-
-    for i in range(n_steps):
-        t_days = i * params.sample_minutes / (60 * 24)
-        t_hours = i * params.sample_minutes / 60.0
-        day_index = int(t_days)  # 0..6
-
-        # ---------
-        # BASISFASE PER DAG
-        # ---------
-        if day_index in [0, 1]:
-            # Dag 1-2: gunstig -> sterke groei
-            base_temp = 23.0
-            base_rh = 92.0
-            temp_amp = 2.0
-            rh_amp = 3.0
-
-        elif day_index == 2:
-            # Dag 3: droger -> decline start
-            base_temp = 24.0
-            base_rh = 72.0
-            temp_amp = 2.5
-            rh_amp = 5.0
-
-        elif day_index == 3:
-            # Dag 4: nog droger en iets koeler
-            base_temp = 19.0
-            base_rh = 68.0
-            temp_amp = 2.0
-            rh_amp = 6.0
-
-        elif day_index in [4, 5]:
-            # Dag 5-6: opnieuw zeer gunstig
-            base_temp = 22.0
-            base_rh = 95.0
-            temp_amp = 1.5
-            rh_amp = 2.5
-
-        else:
-            # Dag 7: schommelt rond kritische grens
-            base_temp = 21.0
-            base_rh = 80.0
-            temp_amp = 2.0
-            rh_amp = 8.0
-
-        # ---------
-        # DAG/NACHT VARIATIE
-        # ---------
-        # Temperatuur piekt overdag
-        temp_variation = temp_amp * math.sin(2 * math.pi * (t_hours - 6) / 24.0)
-
-        # RH vaak omgekeerd aan temperatuur: hoger 's nachts / lager overdag
-        rh_variation = -rh_amp * math.sin(2 * math.pi * (t_hours - 6) / 24.0)
-
-        temp = base_temp + temp_variation
-        rh = base_rh + rh_variation
-
-        # clamp RH fysisch naar [0, 100]
-        rh = max(0.0, min(100.0, rh))
-
-        temperatures.append(temp)
-        rhs.append(rh)
-
-    return temperatures, rhs
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    # =========================================================
-    # 2. SIMULATIE UITVOEREN
-    # =========================================================
-
-    params = VTTOriginalParams(
-        sensitivity=SensitivityLevel.VERY_SENSITIVE,
-        sample_minutes=10,
-        decline_method=DeclineMethod.WOOD,
-        c_decline=1.0,
-    )
-
-    temperatures, rhs = generate_proof_of_concept_week(params)
-
-    results = run_vtt_original_series(
-        temperatures_c=temperatures,
-        rhs_percent=rhs,
-        params=params,
-        initial_m=0.0,
-    )
-
-    time_days = [i * params.sample_minutes / (60 * 24) for i in range(len(results))]
-    m_values = [r.m for r in results]
-    mmax_values = [r.mmax for r in results]
-    rhcrit_values = [r.rhcrit for r in results]
-    growth_flags = [1 if r.favourable_for_growth else 0 for r in results]
-    dmdt_values = [r.dmdt_per_24h for r in results]
-
-    print(f"Aantal stappen: {len(results)}")
-    print(f"Eindwaarde M: {results[-1].m:.3f}")
-    print(f"Gemiddelde M: {mean_m(results):.3f}")
-    print(f"Maximale M: {max(m_values):.3f}")
-
-    plt.figure(figsize=(12, 5))
-    plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
-    plt.plot(time_days, mmax_values, "--", label="Mmax", linewidth=2)
-    plt.xlabel("Tijd [dagen]")
-    plt.ylabel("Mould index")
-    plt.title("VTT proof-of-concept simulatie over 1 week")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    fig, ax1 = plt.subplots(figsize=(12, 5))
-    ax1.plot(time_days, rhs, label="RH [%]", linewidth=2)
-    ax1.plot(time_days, rhcrit_values, "--", label="RHcrit [%]", linewidth=2)
-    ax1.set_xlabel("Tijd [dagen]")
-    ax1.set_ylabel("Relatieve vochtigheid [%]")
-    ax1.grid(True)
-    ax2 = ax1.twinx()
-    ax2.plot(time_days, temperatures, label="Temperatuur [°C]", color="green", linewidth=2)
-    ax2.set_ylabel("Temperatuur [°C]")
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-    plt.title("Omgevingscondities over 1 week")
-    plt.tight_layout()
-    plt.show()
-
-    plt.figure(figsize=(12, 4))
-    plt.plot(time_days, dmdt_values, label="dM/dt per 24h", linewidth=2)
-    plt.axhline(0.0, linestyle="--")
-    plt.xlabel("Tijd [dagen]")
-    plt.ylabel("dM/dt [per 24h]")
-    plt.title("Groei- en decline-snelheid")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    plt.figure(figsize=(12, 5))
-    plt.plot(time_days, m_values, label="Mould index M", linewidth=2)
-    for i in range(1, len(time_days)):
-        if growth_flags[i] == 1:
-            plt.axvspan(time_days[i-1], time_days[i], alpha=0.08)
-    plt.xlabel("Tijd [dagen]")
-    plt.ylabel("Mould index")
-    plt.title("Mould index met gunstige groeiperioden")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
