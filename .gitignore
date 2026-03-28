@@ -1,5 +1,7 @@
 # Environment & secrets
 .env
+.env.local
+frontend/.env.local
 .mcp.json
 
 # Python
@@ -8,8 +10,8 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Vector databases (auto-rebuilt)
-chroma_db/
+# Vector databases
+# chroma_db/ — committed to repo so Render can use it without Ollama
 chroma_db_sweep/
 
 # Evaluation output
@@ -39,6 +41,4 @@ ranking_app/
 # OS
 .DS_Store
 Thumbs.db
-
-#env
-.env 
+reembed.py

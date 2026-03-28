@@ -1,7 +1,10 @@
+const apiKey = import.meta.env.VITE_API_KEY
+const authHeaders = apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
+
 export async function askQuestion(query, history = [], useSensors = true, useHybrid = true) {
   const res = await fetch('/ask', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ query, history, use_sensors: useSensors, use_hybrid: useHybrid }),
   })
   if (!res.ok) throw new Error(`Request failed (${res.status})`)
@@ -33,11 +36,4 @@ export async function getWeather() {
   const res = await fetch('/weather')
   if (!res.ok) throw new Error(`Weather request failed (${res.status})`)
   return res.json()
-}
-
-export async function getHeatmap() {
-  const res = await fetch('/heatmap/latest')
-  if (res.status === 404) return null  // no heatmap uploaded yet
-  if (!res.ok) throw new Error(`Heatmap request failed (${res.status})`)
-  return res.json()  // { url, filename, timestamp }
 }

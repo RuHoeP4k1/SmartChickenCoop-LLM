@@ -245,7 +245,10 @@ def build_vector_store(
     embedding_model = get_embedding_model(embedding_model)
 
     # Reuse existing DB only if docs haven't changed
-    if os.path.exists(persist_dir) and not _needs_rebuild(persist_dir, folder_path):
+    chroma_exists = os.path.exists(persist_dir)
+    needs_rebuild = _needs_rebuild(persist_dir, folder_path) if chroma_exists else True
+    print(f"[RAG] chroma_db exists={chroma_exists}, needs_rebuild={needs_rebuild}, persist_dir={os.path.abspath(persist_dir)}")
+    if chroma_exists and not needs_rebuild:
         print(f"Loading existing vector database from {persist_dir} (docs unchanged)")
         vectordb = Chroma(
             persist_directory=persist_dir,
@@ -360,7 +363,7 @@ def hybrid_search(
         bm25_retriever: BM25 retriever
         query: Search query
         k: Number of results to return
-        weights: [semantic_weight, bm25_weight], default [0.6, 0.4]
+        weights: [semantic_weight, bm25_weight], default [0.7, 0.3] (Phase 1 sweep winner)
         search_type: "mmr" or "similarity" for the semantic retriever
 
     Returns:
@@ -369,7 +372,7 @@ def hybrid_search(
     global _cached_ensemble, _cached_ensemble_key
 
     if weights is None:
-        weights = [0.6, 0.4]
+        weights = [0.7, 0.3]
 
     cache_key = (k, search_type, tuple(weights))
     if _cached_ensemble is None or _cached_ensemble_key != cache_key:

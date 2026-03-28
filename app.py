@@ -4,12 +4,15 @@ Run with: uvicorn app:app --reload
 """
 
 import os
+import asyncio
 import logging
+import secrets
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -51,29 +54,18 @@ COOP_LAT             = float(os.getenv("COOP_LAT", "50.8798"))
 COOP_LON             = float(os.getenv("COOP_LON", "4.7005"))
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Load knowledge base, build retrievers, start scheduler on startup."""
-    logger.info("Starting ChickenCare AI...")
-
-    # Ensure DB tables exist (safe to run every startup — uses IF NOT EXISTS)
-    try:
-        setup_database()
-    except Exception as e:
-        logger.warning(f"DB setup failed (is PostgreSQL running?): {e}")
-
-    # Build RAG pipeline once
-    if os.path.exists(KNOWLEDGE_BASE_PATH):
-        docs = load_documents(KNOWLEDGE_BASE_PATH)
-        chunks = split_documents(docs)
-        state.vectordb = build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH)
-        state.bm25_retriever = build_bm25_retriever(chunks)
-        state.ready = True
-        logger.info(f"RAG pipeline ready ({len(chunks)} chunks)")
-    else:
+async def _build_rag_pipeline():
+    """Build RAG pipeline in the background so startup doesn't block the server."""
+    if not os.path.exists(KNOWLEDGE_BASE_PATH):
         logger.warning(f"Knowledge base path '{KNOWLEDGE_BASE_PATH}' not found.")
-
-    # Start background sensor monitoring
+        return
+    docs = load_documents(KNOWLEDGE_BASE_PATH)
+    chunks = split_documents(docs)
+    state.vectordb = await asyncio.to_thread(lambda: build_vector_store(chunks, folder_path=KNOWLEDGE_BASE_PATH))
+    state.bm25_retriever = build_bm25_retriever(chunks)
+    state.ready = True
+    logger.info(f"RAG pipeline ready ({len(chunks)} chunks)")
+    # Start scheduler once RAG is ready
     try:
         start_scheduler(
             interval_seconds=SCHEDULER_INTERVAL,
@@ -85,6 +77,21 @@ async def lifespan(app: FastAPI):
             logger.info("SIMULATION MODE ON — fake readings every 60 s, scheduler every %ds", SCHEDULER_INTERVAL)
     except Exception as e:
         logger.warning(f"Scheduler failed to start (DB might not be ready): {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start server immediately; build RAG pipeline in background."""
+    logger.info("Starting ChickenCare AI...")
+
+    # Ensure DB tables exist (safe to run every startup — uses IF NOT EXISTS)
+    try:
+        setup_database()
+    except Exception as e:
+        logger.warning(f"DB setup failed (is PostgreSQL running?): {e}")
+
+    # Fire RAG build in background — server starts serving immediately
+    asyncio.create_task(_build_rag_pipeline())
 
     yield
 
@@ -99,13 +106,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow frontend on any origin during development
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# API key auth
+
+_API_KEY = os.getenv("API_KEY")
+if not _API_KEY:
+    logging.warning("API_KEY env var not set — POST /ask is unprotected")
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def verify_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    if not _API_KEY:
+        return  # no key configured → open for local dev
+    if not credentials or not secrets.compare_digest(credentials.credentials, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +187,7 @@ def health_check():
 
 
 @app.post("/ask", response_model=QueryResponse)
-def ask_question(request: QueryRequest):
+def ask_question(request: QueryRequest, _=Depends(verify_key)):
     """
     Ask a chicken-keeping question.
     Uses RAG pipeline with optional sensor context.

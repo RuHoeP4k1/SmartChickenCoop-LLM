@@ -125,6 +125,15 @@ function IconChicken({ className }) {
   )
 }
 
+function IconPackage({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" />
+      <path d="M12 12l-6-3.46M12 12l6-3.46M12 12v8" />
+    </svg>
+  )
+}
+
 /* ── Icon map ─────────────────────────────────────────────────────── */
 
 const ICON_MAP = {
@@ -137,6 +146,7 @@ const ICON_MAP = {
   automation: IconGear,
   weather:    IconCloud,
   chickens:   IconChicken,
+  packages:   IconPackage,
 }
 
 /* ── Layout ───────────────────────────────────────────────────────── */
