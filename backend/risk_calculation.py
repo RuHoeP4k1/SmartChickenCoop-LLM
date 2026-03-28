@@ -104,7 +104,7 @@ def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
     return 0.85 * temp_c + 0.15 * twb
 
 
-def _calculate_thi_streak_bonus(
+def _calculate_thi_streak_bonus( 
     thi: float,
     thi_streak_minutes: int,
     streak_thi_threshold: float,
@@ -242,37 +242,43 @@ def compute_heat_risk(
     thi = _calculate_thi(temperature_c, humidity_pct)
 
 # De score wordt bepaald door de huidige THI-waarde, met hogere scores voor hogere THI.
-    if thi < 19:
+    if thi < 18:
         score = 0.0
-        contributing_factors.append("THI within safe range")
+        contributing_factors.append("THI within optimal range")
+
+    elif thi < 20:
+        score = 0.15
+        contributing_factors.append("THI slightly elevated")
+
     elif thi < 22:
-        score = 0.2
-        contributing_factors.append("THI elevated")
-    elif thi < 25:
-        score = 0.5
-        contributing_factors.append("THI moderately high")
-    elif thi < 29:
-        score = 0.75
-        contributing_factors.append("THI high")
-    elif thi < 31:
-        score = 0.85
-        contributing_factors.append("THI very high")
-    elif thi < 33:
-        score = 0.95
-        contributing_factors.append("THI critical")
+        score = 0.35
+        contributing_factors.append("THI approaching critical threshold")
+
+    elif thi < 24:
+        score = 0.6
+        contributing_factors.append("THI above critical threshold (performance decline starts)")
+
+    elif thi < 26:
+        score = 0.8
+        contributing_factors.append("THI high (clear heat stress zone)")
+
+    elif thi < 28:
+        score = 0.9
+        contributing_factors.append("THI very high (strong performance impact)")
+
     else:
         score = 1.0
-        contributing_factors.append("THI extreme")
+        contributing_factors.append("THI extreme (severe heat stress)")
 
-    streak_bonus = _calculate_thi_streak_bonus(
-        thi=thi,
-        thi_streak_minutes=thi_streak_minutes,
-        streak_thi_threshold=streak_thi_threshold,
-        streak_threshold_minutes=streak_threshold_minutes,
-        streak_max_bonus=streak_max_bonus,
-        streak_base_bonus_at_threshold=streak_base_bonus_at_threshold,
-        streak_growth_rate=streak_growth_rate,
-    )
+        streak_bonus = _calculate_thi_streak_bonus(
+            thi=thi,
+            thi_streak_minutes=thi_streak_minutes,
+            streak_thi_threshold=streak_thi_threshold,
+            streak_threshold_minutes=streak_threshold_minutes,
+            streak_max_bonus=streak_max_bonus,
+            streak_base_bonus_at_threshold=streak_base_bonus_at_threshold,
+            streak_growth_rate=streak_growth_rate,
+        )
 
     if streak_bonus > 0:
         score += streak_bonus
@@ -383,6 +389,7 @@ class VTTState:
 @dataclass
 class VTTStepResult:
     m: float
+    mold_risk_level: str
     dmdt_per_24h: float #slope van M per 24 uur
     rhcrit: float
     mmax: float
@@ -527,6 +534,7 @@ def vtt_original_step(
 
     return VTTStepResult(
         m=state.m,
+        mold_risk_level=classify_mold_risk_level(state.m),
         dmdt_per_24h=dmdt_24h,
         rhcrit=rhcrit,
         mmax=mmax,
@@ -561,4 +569,24 @@ def mean_m(results: List[VTTStepResult]) -> float:
     if not results:
         return 0.0
     return sum(r.m for r in results) / len(results)
+
+
+def classify_mold_risk_level(m: float) -> str:
+    """Map the VTT mold index M to a qualitative mold risk level."""
+    if m < 1.0:
+        return "low"
+    if m < 2.5:
+        return "medium"
+    if m < 4.5:
+        return "high"
+    return "severe"
+
+
+def summarize_mold_risk(results: List[VTTStepResult]) -> Dict[str, Any]:
+    """Return the mean mold index and its qualitative risk level."""
+    m = mean_m(results)
+    return {
+        "m": round(m, 4),
+        "mold_risk_level": classify_mold_risk_level(m),
+    }
 
