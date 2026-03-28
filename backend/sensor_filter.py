@@ -188,9 +188,6 @@ def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
     if not sensor_data:
         return False
 
-    if is_reading_stale(sensor_data):
-        return False
-
     query_lower = user_query.lower()
 
     # Rule 2: User is asking about their coop right now
@@ -324,9 +321,15 @@ def get_sensor_context(sensor_data: Dict) -> str:
     if sensor_data.get("ventilation_on"):
         alerts.append("Ventilation: on")
 
+    ts = sensor_data.get("timestamp")
+    if is_reading_stale(sensor_data) and ts is not None:
+        header = f"Last sensor measurement (recorded: {ts}):"
+    else:
+        header = "Current coop readings:"
+
     if alerts:
-        return "Current coop readings:\n" + "\n".join(f"- {a}" for a in alerts)
-    return "All coop readings normal."
+        return header + "\n" + "\n".join(f"- {a}" for a in alerts)
+    return f"{header}\n- All readings normal."
 
 
 # =============================================================================
