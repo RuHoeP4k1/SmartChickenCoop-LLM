@@ -1,21 +1,22 @@
 from __future__ import annotations
+
 import math
-from typing import Any, Dict, List
-from enum import Enum
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from pydantic.dataclasses import dataclass
-from dataclasses import dataclass
-from math import exp, log
-from typing import Iterable, List, Optional
-
-#=============================================================================
-# SUPABASE DATA FETCHING AND MAPPING
-# =============================================================================
-
 import os
-from supabase import create_client, Client
-from typing import List, Dict, Any
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, Iterable, List, Optional
+
+from supabase import Client, create_client
+
+SENSOR_TABLE = "sensor_readings_colson"
+RISK_SNAPSHOT_TABLE = "risk_snapshots"
+CV_COUNT_TABLE = "cv_counts_colson"
+
+RECENT_READING_LIMIT = 12
+DEFAULT_INTERVAL_MINUTES = 10
+DEFAULT_THI_THRESHOLD = 25.0
+
+Reading = Dict[str, Any]
 
 
 def get_supabase_client() -> Client:
@@ -32,14 +33,13 @@ def get_supabase_client() -> Client:
 
 
 def fetch_recent_environment_readings(
-    table_name: str = "sensor_readings",
-    limit: int = 12,
-) -> List[Dict[str, Any]]:
+    table_name: str = SENSOR_TABLE,
+    limit: int = RECENT_READING_LIMIT,
+) -> List[Reading]:
     """
-    Fetch recent valid environment rows from Supabase.
+    Fetch recent valid temperature and humidity rows from Supabase.
 
-    Rows are returned newest first and only include the fields needed to
-    compute a THI series.
+    Rows are returned newest first.
     """
     client = get_supabase_client()
 
@@ -62,9 +62,9 @@ def fetch_recent_environment_readings(
 
 
 def fetch_latest_environment_reading(
-    table_name: str = "sensor_readings",
-) -> Dict[str, Any]:
-    """Fetch the latest valid raw environment row from Supabase."""
+    table_name: str = SENSOR_TABLE,
+) -> Reading:
+    """Fetch the newest valid environment row from Supabase."""
     rows = fetch_recent_environment_readings(table_name=table_name, limit=1)
     if not rows:
         raise ValueError(f"No valid row found in Supabase table '{table_name}'.")
@@ -73,10 +73,10 @@ def fetch_latest_environment_reading(
 
 
 def build_environment_inputs_from_supabase(
-    reading: Optional[Dict[str, Any]] = None,
-    table_name: str = "sensor_readings",
+    reading: Optional[Reading] = None,
+    table_name: str = SENSOR_TABLE,
 ) -> Dict[str, float]:
-    """Map the latest raw Supabase row to minimal environment inputs."""
+    """Map a Supabase row to the minimal temperature and humidity inputs."""
     if reading is None:
         reading = fetch_latest_environment_reading(table_name=table_name)
 
@@ -86,27 +86,38 @@ def build_environment_inputs_from_supabase(
             "humidity_pct": float(reading["humidity_pct"]),
         }
     except KeyError as exc:
-        raise ValueError(f"Missing required field in Supabase row: {exc.args[0]}") from exc
+        raise ValueError(
+            f"Missing required field in Supabase row: {exc.args[0]}"
+        ) from exc
     except (TypeError, ValueError) as exc:
-        raise ValueError("Invalid temperature_c or humidity_pct value in Supabase row.") from exc
+        raise ValueError(
+            "Invalid temperature_c or humidity_pct value in Supabase row."
+        ) from exc
 
 
 def compute_current_heat_risk_from_recent_readings(
-    table_name: str = "sensor_readings_colson",
-    limit: int = 12,
-    thi_threshold: float = 25.0,
-    interval_minutes: int = 10,
+    table_name: str = SENSOR_TABLE,
+    limit: int = RECENT_READING_LIMIT,
+    thi_threshold: float = DEFAULT_THI_THRESHOLD,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
 ) -> Dict[str, Any]:
-    """
-    Compute the current heat risk using recent Supabase readings so that the
-    THI streak is included in the score.
-
-    Uses the newest row as the current reading and derives thi_streak_minutes
-    from the recent THI series.
-    """
+    """Compatibility wrapper that fetches readings before computing heat risk."""
     readings = fetch_recent_environment_readings(table_name=table_name, limit=limit)
+    return compute_current_heat_risk_from_readings(
+        readings=readings,
+        thi_threshold=thi_threshold,
+        interval_minutes=interval_minutes,
+    )
+
+
+def compute_current_heat_risk_from_readings(
+    readings: List[Reading],
+    thi_threshold: float = DEFAULT_THI_THRESHOLD,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
+) -> Dict[str, Any]:
+    """Compute heat risk from already-fetched recent readings."""
     if not readings:
-        raise ValueError(f"No recent readings found in Supabase table '{table_name}'.")
+        raise ValueError("No readings provided for heat risk calculation.")
 
     thi_series = build_thi_series_from_readings(readings)
     thi_streak_minutes = calculate_thi_streak_minutes(
@@ -123,13 +134,7 @@ def compute_current_heat_risk_from_recent_readings(
     )
     result["thi_streak_minutes"] = thi_streak_minutes
     return result
-    
-#=============================================================================
-# THI_SERIES CALCULATION
-# concept: 12 rijen worden opgehaald, dat is 2 uur aan data bij 10-minuten intervallen. 
-# Daarmee kan een THI-serie worden opgebouwd die de afgelopen 2 uur laat zien hoe de THI zich heeft ontwikkeld. 
-# Op basis van die serie kan worden berekend hoe lang de THI al boven een bepaalde drempelwaarde is gebleven, wat een belangrijke factor is voor het risico op hittestress bij kippen.
-#=============================================================================
+
 
 def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
     """Compute THI from dry-bulb temperature and relative humidity."""
@@ -137,7 +142,7 @@ def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
     return 0.85 * temp_c + 0.15 * twb
 
 
-def _calculate_thi_streak_bonus( 
+def _calculate_thi_streak_bonus(
     thi: float,
     thi_streak_minutes: int,
     streak_thi_threshold: float,
@@ -147,10 +152,10 @@ def _calculate_thi_streak_bonus(
     streak_growth_rate: float,
 ) -> float:
     """
-    Compute a bounded exponential-like bonus for sustained THI exposure.
+    Compute a bounded bonus for sustained THI exposure.
 
-    The bonus starts at `streak_base_bonus_at_threshold` once the minimum streak
-    duration is reached and then approaches `streak_max_bonus`.
+    TODO: Review whether the caller intends this bonus to apply only in the
+    highest THI branch. The cleanup keeps the current behavior unchanged.
     """
     if thi < streak_thi_threshold:
         return 0.0
@@ -167,16 +172,9 @@ def _calculate_thi_streak_bonus(
     return min(bonus, streak_max_bonus)
 
 
-def build_thi_series_from_readings(
-    readings: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    Build a THI series from Supabase readings.
-
-    The function assumes the readings are already ordered newest first by the
-    Supabase query.
-    """
-    thi_series: List[Dict[str, Any]] = []
+def build_thi_series_from_readings(readings: List[Reading]) -> List[Reading]:
+    """Build a THI series from recent readings ordered newest first."""
+    thi_series: List[Reading] = []
     for row in readings:
         timestamp = row.get("timestamp")
         temperature_c = row.get("temperature_c")
@@ -203,15 +201,11 @@ def build_thi_series_from_readings(
 
 
 def calculate_thi_streak_minutes(
-    thi_series: List[Dict[str, Any]],
+    thi_series: List[Reading],
     thi_threshold: float,
-    interval_minutes: int = 10,
+    interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
 ) -> int:
-    """
-    Calculate how long THI has continuously stayed above a threshold.
-
-    The input series is expected to be ordered newest first.
-    """
+    """Calculate how long THI has continuously stayed above a threshold."""
     consecutive_rows = 0
 
     for point in thi_series:
@@ -223,47 +217,39 @@ def calculate_thi_streak_minutes(
     return consecutive_rows * interval_minutes
 
 
-def _build_thi_series(readings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Backward-compatible wrapper for THI series construction."""
+def _build_thi_series(readings: List[Reading]) -> List[Reading]:
+    """Compatibility wrapper for older callers."""
     return build_thi_series_from_readings(readings)
 
-#=============================================================================
-# helper functions
-#=============================================================================
+
 def wet_bulb_temperature_c(t_db_c: float, rh_percent: float) -> float:
     """
-    Approximate wet-bulb temperature (°C) from dry-bulb temperature (°C)
-    and relative humidity (%) using Stull (2011) approximation.
-
-    Valid for typical ambient conditions (roughly 0–50°C, 5–99% RH).
-    Good enough for control/early warning use cases.
+    Approximate wet-bulb temperature (C) from dry-bulb temperature (C)
+    and relative humidity (%) using the Stull (2011) approximation.
     """
-    rh = max(1.0, min(rh_percent, 99.0))  # keep in a safe range
+    rh = max(1.0, min(rh_percent, 99.0))
     t = t_db_c
 
-    twb = (
+    return (
         t * math.atan(0.151977 * math.sqrt(rh + 8.313659))
         + math.atan(t + rh)
         - math.atan(rh - 1.676331)
         + 0.00391838 * (rh ** 1.5) * math.atan(0.023101 * rh)
         - 4.686035
     )
-    return twb
 
-#=============================================================================
-# HEAT RISK CALCULATION FUNCTION
-#=============================================================================
 
 def compute_heat_risk(
     temperature_c: float,
     humidity_pct: float,
     thi_streak_minutes: int = 0,
-    streak_thi_threshold: float = 25.0, #vanaf hier zijn alle variabelen voor de streak
-    streak_threshold_minutes: int = 30, # vanaf hier begint de bonus te lopen
-    streak_max_bonus: float = 0.20, # maximale bonus die kan worden bereikt door een lange streak
-    streak_base_bonus_at_threshold: float = 0.05, # bonus die al wordt toegekend zodra de streak drempel is bereikt (bijv. 30 minuten boven 25°C)
-    streak_growth_rate: float = 0.06, # bepaalt hoe snel de bonus groeit met extra minuten boven de drempel. Hogere waarde = snellere groei richting max bonus.
+    streak_thi_threshold: float = DEFAULT_THI_THRESHOLD,
+    streak_threshold_minutes: int = 30,
+    streak_max_bonus: float = 0.20,
+    streak_base_bonus_at_threshold: float = 0.05,
+    streak_growth_rate: float = 0.06,
 ) -> Dict[str, Any]:
+    """Compute the current heat-risk snapshot."""
     if not 0 <= humidity_pct <= 100:
         raise ValueError("humidity_pct must be between 0 and 100")
     if thi_streak_minutes < 0:
@@ -275,44 +261,39 @@ def compute_heat_risk(
 
     thi = _calculate_thi(temperature_c, humidity_pct)
 
-# De score wordt bepaald door de huidige THI-waarde, met hogere scores voor hogere THI.
     if thi < 18:
         score = 0.0
         contributing_factors.append("THI within optimal range")
-
     elif thi < 20:
         score = 0.15
         contributing_factors.append("THI slightly elevated")
-
     elif thi < 22:
         score = 0.35
         contributing_factors.append("THI approaching critical threshold")
-
     elif thi < 24:
         score = 0.6
-        contributing_factors.append("THI above critical threshold (performance decline starts)")
-
+        contributing_factors.append(
+            "THI above critical threshold (performance decline starts)"
+        )
     elif thi < 26:
         score = 0.8
         contributing_factors.append("THI high (clear heat stress zone)")
-
     elif thi < 28:
         score = 0.9
         contributing_factors.append("THI very high (strong performance impact)")
-
     else:
         score = 1.0
         contributing_factors.append("THI extreme (severe heat stress)")
 
-        streak_bonus = _calculate_thi_streak_bonus(
-            thi=thi,
-            thi_streak_minutes=thi_streak_minutes,
-            streak_thi_threshold=streak_thi_threshold,
-            streak_threshold_minutes=streak_threshold_minutes,
-            streak_max_bonus=streak_max_bonus,
-            streak_base_bonus_at_threshold=streak_base_bonus_at_threshold,
-            streak_growth_rate=streak_growth_rate,
-        )
+    streak_bonus = _calculate_thi_streak_bonus(
+        thi=thi,
+        thi_streak_minutes=thi_streak_minutes,
+        streak_thi_threshold=streak_thi_threshold,
+        streak_threshold_minutes=streak_threshold_minutes,
+        streak_max_bonus=streak_max_bonus,
+        streak_base_bonus_at_threshold=streak_base_bonus_at_threshold,
+        streak_growth_rate=streak_growth_rate,
+    )
 
     if streak_bonus > 0:
         score += streak_bonus
@@ -341,9 +322,36 @@ def compute_heat_risk(
         "humidity_pct": round(humidity_pct, 2),
     }
 
-#=============================================================================
-# VTT MOLD GROWTH MODEL IMPLEMENTATION
-#=============================================================================
+
+def compute_current_mold_risk_from_state(
+    temperature_c: float,
+    humidity_pct: float,
+    previous_m: float = 0.0,
+    previous_consecutive_unfavourable_minutes: int = 0,
+    sample_minutes: int = DEFAULT_INTERVAL_MINUTES,
+) -> Dict[str, Any]:
+    """Advance the VTT mold state by one control-cycle step."""
+    state = VTTState(
+        m=previous_m,
+        consecutive_unfavourable_minutes=previous_consecutive_unfavourable_minutes,
+    )
+    params = VTTOriginalParams(sample_minutes=sample_minutes)
+    result = vtt_original_step(
+        temp_c=temperature_c,
+        rh=humidity_pct,
+        state=state,
+        params=params,
+    )
+
+    return {
+        "mold_index_m": result.m,
+        "mold_risk_level": result.mold_risk_level,
+        "mold_favourable_for_growth": result.favourable_for_growth,
+        "mold_consecutive_unfavourable_minutes": state.consecutive_unfavourable_minutes,
+        "mold_dmdt_per_24h": result.dmdt_per_24h,
+        "mold_rhcrit": result.rhcrit,
+        "mold_mmax": result.mmax,
+    }
 
 
 class SensitivityLevel(str, Enum):
@@ -351,6 +359,7 @@ class SensitivityLevel(str, Enum):
     SENSITIVE = "sensitive"
     MEDIUM_RESISTANT = "medium_resistant"
     RESISTANT = "resistant"
+
 
 class DeclineMethod(str, Enum):
     WOOD = "WOOD"
@@ -366,8 +375,7 @@ class SensitivityParams:
     C: float
     rh_above_20: float
 
-# Original sensitivity table from the paper
-# Source paper table: very sensitive, sensitive, medium resistant, resistant
+
 ORIGINAL_SENSITIVITIES = {
     SensitivityLevel.VERY_SENSITIVE: SensitivityParams(
         k11=1.0, k12=2.0, A=1.0, B=7.0, C=2.0, rh_above_20=70.0
@@ -383,48 +391,39 @@ ORIGINAL_SENSITIVITIES = {
     ),
 }
 
-# equations
+
 @dataclass(frozen=True)
 class VTTOriginalParams:
-    """
-    Originele VTT-parameters.
+    """Original VTT parameters with defaults matching current runtime behavior."""
 
-    Defaults:
-    - sensitivity: VERY_SENSITIVE
-    - wood_type_w: 0 = pine, 1 = spruce
-    - surface_quality_sq: 0 = sawn, 1 = kiln dried
-    - p_t, p_rh, p_c: originele waarden uit het model
-    - decline_method: WOOD (originele toepassing is hout)
-    - c_decline: 1.0 als standaard intensiteit
-    - sample_minutes: numerieke timestep in minuten voor discrete integratie
-    """
     sensitivity: SensitivityLevel = SensitivityLevel.VERY_SENSITIVE
-    wood_type_w: int = 0 # 0 = pine, 1 = spruce
-    surface_quality_sq: int = 0 # 0 = sawn, 1 = kiln dried
+    wood_type_w: int = 0
+    surface_quality_sq: int = 0
     p_t: float = 0.45
     p_rh: float = 9.0
     p_c: float = 58.0
     decline_method: DeclineMethod = DeclineMethod.WOOD
     c_decline: float = 1.0
-    # VTT definieert dM/dt per 24 uur; sample_minutes bepaalt alleen de integratiestap.
-    sample_minutes: int = 10
+    sample_minutes: int = DEFAULT_INTERVAL_MINUTES
     m_min: float = 0.0
-    m_max_hard: float = 6.0 # harde bovengrens voor M, ook al kan het model theoretisch hoger gaan. Dit helpt numerische stabiliteit.
+    m_max_hard: float = 6.0
 
     def __post_init__(self) -> None:
         if self.sample_minutes <= 0:
             raise ValueError("sample_minutes must be > 0")
+
 
 @dataclass
 class VTTState:
     m: float = 0.0
     consecutive_unfavourable_minutes: int = 0
 
+
 @dataclass
 class VTTStepResult:
     m: float
     mold_risk_level: str
-    dmdt_per_24h: float #slope van M per 24 uur
+    dmdt_per_24h: float
     rhcrit: float
     mmax: float
     favourable_for_growth: bool
@@ -436,15 +435,16 @@ def get_sensitivity_params(level: SensitivityLevel) -> SensitivityParams:
 
 def rh_crit_original(temp_c: float, rh_above_20: float) -> float:
     """
-    RHcrit volgens het originele model, maar met de gecorrigeerde formule uit
-    het corrigendum van de paper.
-
-    Corrigendum:
-    RHcrit = -0.00267*T^3 + 0.160*T^2 - 3.13*T + 100   when T <= 20
-             RH>20                                     when T >= 20
+    Critical relative humidity from the original model with the corrected
+    formula from the corrigendum.
     """
     if temp_c <= 20.0:
-        return -0.00267 * (temp_c ** 3) + 0.160 * (temp_c ** 2) - 3.13 * temp_c + 100.0
+        return (
+            -0.00267 * (temp_c ** 3)
+            + 0.160 * (temp_c ** 2)
+            - 3.13 * temp_c
+            + 100.0
+        )
     return rh_above_20
 
 
@@ -452,19 +452,20 @@ def compute_k1(m: float, sens: SensitivityParams) -> float:
     return sens.k11 if m < 1.0 else sens.k12
 
 
-def compute_mmax(rh: float, rhcrit: float, sens: SensitivityParams) -> float: #mmax is de verzadigingswaarde van M bij gegeven RH
+def compute_mmax(rh: float, rhcrit: float, sens: SensitivityParams) -> float:
+    """Compute the saturation value for mold index M at the current RH."""
     denom = rhcrit - 100.0
     if abs(denom) < 1e-12:
         x = 0.0
     else:
-        x = (rhcrit - rh) / denom # genormaliseerde afstand van RH tot RHcrit, geschaald naar [0, 1] waarbij 0 bij RH=100% is en 1 bij RH=RHcrit
+        x = (rhcrit - rh) / denom
 
     mmax = sens.A + sens.B * x - sens.C * (x ** 2)
     return max(0.0, mmax)
 
 
 def compute_k2(m: float, mmax: float) -> float:
-    return max(1.0 - exp(2.3 * (m - mmax)), 0.0)
+    return max(1.0 - math.exp(2.3 * (m - mmax)), 0.0)
 
 
 def growth_rate_per_24h(
@@ -476,36 +477,28 @@ def growth_rate_per_24h(
     sens: SensitivityParams,
     rhcrit: float,
 ) -> float:
-    """
-    Originele VTT groeivergelijking:
-    dM/dt = k1*k2 / (7 * exp(-pT ln(T) - pRH ln(RH) + 0.14W - 0.33SQ + pC))
-
-    dM/dt is uitgedrukt per 24 uur.
-    """
+    """Original VTT growth equation expressed per 24 hours."""
     k1 = compute_k1(m, sens)
     mmax = compute_mmax(rh, rhcrit, sens)
     k2 = compute_k2(m, mmax)
 
-    # Numerieke bescherming - log(0) is niet gedefinieerd, dus we zorgen dat T en RH binnen een redelijke range blijven voor de logaritme.
     t_for_log = max(temp_c, 0.1)
-    rh_for_log = min(max(rh, 0.1), 100)
-    
+    rh_for_log = min(max(rh, 0.1), 100.0)
+
     exponent_term = (
-        -params.p_t * log(t_for_log)
-        -params.p_rh * log(rh_for_log)
+        -params.p_t * math.log(t_for_log)
+        -params.p_rh * math.log(rh_for_log)
         + 0.14 * params.wood_type_w
         - 0.33 * params.surface_quality_sq
         + params.p_c
     )
 
-    denominator = 7.0 * exp(exponent_term)
+    denominator = 7.0 * math.exp(exponent_term)
     return (k1 * k2) / denominator
 
 
 def decline_rate_per_24h(state: VTTState, params: VTTOriginalParams) -> float:
-    """
-    Originele decline-regel.
-    """
+    """Original VTT decline rule."""
     hours_below = state.consecutive_unfavourable_minutes / 60.0
 
     if params.decline_method == DeclineMethod.NON_WOOD:
@@ -528,12 +521,7 @@ def vtt_original_step(
     state: VTTState,
     params: VTTOriginalParams,
 ) -> VTTStepResult:
-    """
-    Eén numerieke stap van het originele VTT-model.
-    De toestand is M(t) = state.m.
-    Let op: in VTT is dM/dt uitgedrukt per 24 uur, niet per timestep.
-    Daarom wordt de increment geschaald met sample_minutes / (24 * 60).
-    """
+    """Advance the original VTT mold model by one discrete time step."""
     rh = min(max(rh, 0.0), 100.0)
     sens = get_sensitivity_params(params.sensitivity)
     rhcrit = rh_crit_original(temp_c, sens.rh_above_20)
@@ -552,17 +540,14 @@ def vtt_original_step(
         )
     else:
         state.consecutive_unfavourable_minutes += params.sample_minutes
-        # Physical guard: once M hits zero, it cannot decline below zero.
-        # Keep M flat at 0 until favourable conditions create growth again.
-        if state.m <= 0.0:
+        if state.m <= params.m_min:
             dmdt_24h = 0.0
         else:
             dmdt_24h = decline_rate_per_24h(state, params)
 
     delta_m = dmdt_24h * (params.sample_minutes / (24.0 * 60.0))
     state.m += delta_m
-    # Numerieke stabiliteit: houd M altijd binnen de modelgrenzen [0, 6].
-    state.m = max(0.0, min(state.m, 6.0))
+    state.m = max(params.m_min, min(state.m, params.m_max_hard))
 
     mmax = compute_mmax(rh, rhcrit, sens)
 
@@ -583,6 +568,7 @@ def run_vtt_original_series(
     params: VTTOriginalParams,
     initial_m: float = 0.0,
 ) -> List[VTTStepResult]:
+    """Run the original VTT model over a series of readings."""
     state = VTTState(m=initial_m, consecutive_unfavourable_minutes=0)
     results: List[VTTStepResult] = []
 
@@ -600,13 +586,14 @@ def run_vtt_original_series(
 
 
 def mean_m(results: List[VTTStepResult]) -> float:
+    """Return the mean mold index for a result series."""
     if not results:
         return 0.0
-    return sum(r.m for r in results) / len(results)
+    return sum(result.m for result in results) / len(results)
 
 
 def classify_mold_risk_level(m: float) -> str:
-    """Map the VTT mold index M to a qualitative mold risk level."""
+    """Map the VTT mold index M to a qualitative risk level."""
     if m < 1.0:
         return "low"
     if m < 2.5:
@@ -617,10 +604,9 @@ def classify_mold_risk_level(m: float) -> str:
 
 
 def summarize_mold_risk(results: List[VTTStepResult]) -> Dict[str, Any]:
-    """Return the mean mold index and its qualitative risk level."""
+    """Return the mean mold index and qualitative risk for a result series."""
     m = mean_m(results)
     return {
         "m": round(m, 4),
         "mold_risk_level": classify_mold_risk_level(m),
     }
-
