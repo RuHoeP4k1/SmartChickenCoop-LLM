@@ -85,6 +85,15 @@ RH_MAX      = 0.70    # 0-1 — humidity limit
 CO2_TARGET  = 2000.0  # ppm — desired indoor CO2
 CO2_AMBIENT = 400.0   # ppm — outdoor baseline CO2
 
+# Heat-risk-based boost (small supervisory correction)
+HEAT_RISK_BOOST_1 = 50.0   # mild boost
+HEAT_RISK_BOOST_2 = 75.0   # medium boost
+HEAT_RISK_BOOST_3 = 90.0   # high boost
+
+HEAT_RISK_MULT_LOW  = 1.05   # +5%
+HEAT_RISK_MULT_MID  = 1.10   # +10%
+HEAT_RISK_MULT_HIGH = 1.15   # +15%
+
 # H2S
 H2S_WARN    = 1.0     # ppm — warning: boost ventilation proportionally
 H2S_EMERG   = 5.0     # ppm — hard override: fan to maximum regardless of all else
@@ -312,6 +321,7 @@ def can_dry(T_in: float, RH_in: float, T_amb: float, RH_amb: float) -> bool:
 
 def compute_fan_rate(
     sensors:     dict,
+    heat_risk:   dict,
     T_amb:       float,
     RH_amb:      float,
     n_birds:     int,
@@ -335,6 +345,7 @@ def compute_fan_rate(
     RH_in  = sensors["RH_in"]
     H2S_in = sensors["H2S_in"]
     CO2_in = sensors["CO2_in"]   # None until sensor is installed
+    heat_risk_score = float(heat_risk["risk_score"])
 
     notes = []
 
@@ -381,12 +392,26 @@ def compute_fan_rate(
             dT        = T_MAX - T_amb
             if dT > 0:
                 vr_temp = (Q_sen / (rho * cp * dT)) * 3600
-                if vr_temp > target:
+                # Small heat-risk-based boost on top of the physical heat target
+                if heat_risk_score >= HEAT_RISK_BOOST_3:
+                    heat_boost = HEAT_RISK_MULT_HIGH
+                elif heat_risk_score >= HEAT_RISK_BOOST_2:
+                    heat_boost = HEAT_RISK_MULT_MID
+                elif heat_risk_score >= HEAT_RISK_BOOST_1:
+                    heat_boost = HEAT_RISK_MULT_LOW
+                else:
+                    heat_boost = 1.0
+
+                vr_temp_boosted = vr_temp * heat_boost
+
+                if vr_temp_boosted > target:
                     notes.append(
-                        f"heat stress T={T_in:.1f}°C → {vr_temp:.0f} m3/h "
-                        f"(T_amb={T_amb:.1f}°C, can cool)"
+                        f"heat stress T={T_in:.1f}°C risk={heat_risk_score:.1f} "
+                        f"→ {vr_temp_boosted:.0f} m3/h "
+                        f"(base {vr_temp:.0f}, boost x{heat_boost:.2f}, "
+                        f"T_amb={T_amb:.1f}°C, can cool)"
                     )
-                    target = vr_temp
+                    target = vr_temp_boosted
         # else: can_cool() already logged the skip reason
 
     # ── PRIORITY 2: Humidity ──────────────────────────────────────────
@@ -493,7 +518,7 @@ def main() -> None:
     # Step 3 — Control
     prev_rate, initialised = load_state()
     rate, reason = compute_fan_rate(
-        sensors, T_amb, RH_amb, n_birds, prev_rate, initialised
+        sensors, {"risk_score": 0.0}, T_amb, RH_amb, n_birds, prev_rate, initialised
     )
 
     log.info("Result    rate=%.0f m3/h", rate)

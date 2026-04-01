@@ -89,6 +89,40 @@ def build_environment_inputs_from_supabase(
         raise ValueError(f"Missing required field in Supabase row: {exc.args[0]}") from exc
     except (TypeError, ValueError) as exc:
         raise ValueError("Invalid temperature_c or humidity_pct value in Supabase row.") from exc
+
+
+def compute_current_heat_risk_from_recent_readings(
+    table_name: str = "sensor_readings_colson",
+    limit: int = 12,
+    thi_threshold: float = 25.0,
+    interval_minutes: int = 10,
+) -> Dict[str, Any]:
+    """
+    Compute the current heat risk using recent Supabase readings so that the
+    THI streak is included in the score.
+
+    Uses the newest row as the current reading and derives thi_streak_minutes
+    from the recent THI series.
+    """
+    readings = fetch_recent_environment_readings(table_name=table_name, limit=limit)
+    if not readings:
+        raise ValueError(f"No recent readings found in Supabase table '{table_name}'.")
+
+    thi_series = build_thi_series_from_readings(readings)
+    thi_streak_minutes = calculate_thi_streak_minutes(
+        thi_series,
+        thi_threshold=thi_threshold,
+        interval_minutes=interval_minutes,
+    )
+
+    latest = readings[0]
+    result = compute_heat_risk(
+        temperature_c=float(latest["temperature_c"]),
+        humidity_pct=float(latest["humidity_pct"]),
+        thi_streak_minutes=thi_streak_minutes,
+    )
+    result["thi_streak_minutes"] = thi_streak_minutes
+    return result
     
 #=============================================================================
 # THI_SERIES CALCULATION
@@ -96,7 +130,6 @@ def build_environment_inputs_from_supabase(
 # Daarmee kan een THI-serie worden opgebouwd die de afgelopen 2 uur laat zien hoe de THI zich heeft ontwikkeld. 
 # Op basis van die serie kan worden berekend hoe lang de THI al boven een bepaalde drempelwaarde is gebleven, wat een belangrijke factor is voor het risico op hittestress bij kippen.
 #=============================================================================
-
 
 def _calculate_thi(temp_c: float, humidity_pct: float) -> float:
     """Compute THI from dry-bulb temperature and relative humidity."""
@@ -237,6 +270,7 @@ def compute_heat_risk(
         raise ValueError("thi_streak_minutes must be non-negative")
 
     score = 0.0
+    streak_bonus = 0.0
     contributing_factors: List[str] = []
 
     thi = _calculate_thi(temperature_c, humidity_pct)
