@@ -349,6 +349,10 @@ CREATE INDEX IF NOT EXISTS idx_event_type ON event_log(event_type);
 
 MIGRATE_EVENT_LOG_SQL = """
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS sources JSONB;
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS routing_mode TEXT;
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS routing_decision TEXT;
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS prompt_template TEXT;
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
 """
 
 
@@ -360,6 +364,10 @@ def insert_event(
     sensor_snapshot: dict = None,
     sensor_context_filtered: str = None,
     sources: list = None,
+    routing_mode: str = None,
+    routing_decision: str = None,
+    prompt_template: str = None,
+    response_time_ms: int = None,
 ) -> int:
     """
     Log an event to the event_log table.
@@ -377,8 +385,10 @@ def insert_event(
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO event_log
-               (event_type, severity, user_query, llm_response, sensor_snapshot, sensor_context_filtered, sources)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+               (event_type, severity, user_query, llm_response, sensor_snapshot,
+                sensor_context_filtered, sources, routing_mode, routing_decision,
+                prompt_template, response_time_ms)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 event_type,
                 severity,
@@ -387,6 +397,10 @@ def insert_event(
                 json.dumps(sensor_snapshot, default=str) if sensor_snapshot else None,
                 sensor_context_filtered,
                 json.dumps(list(dict.fromkeys(sources))) if sources else None,
+                routing_mode,
+                routing_decision,
+                prompt_template,
+                response_time_ms,
             ),
         )
         event_id = cursor.fetchone()[0]
@@ -472,6 +486,109 @@ CREATE INDEX IF NOT EXISTS idx_cv_colson_timestamp ON cv_counts_colson(timestamp
 """
 
 
+CREATE_RESPONSE_REVIEWS_SQL = """
+CREATE TABLE IF NOT EXISTS response_reviews (
+    id SERIAL PRIMARY KEY,
+    event_id INTEGER REFERENCES event_log(id) ON DELETE CASCADE,
+    is_good BOOLEAN NOT NULL,
+    routing_correct BOOLEAN,
+    notes TEXT,
+    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(event_id)
+);
+"""
+
+
+def upsert_review(
+    event_id: int,
+    is_good: bool,
+    routing_correct: bool = None,
+    notes: str = "",
+) -> int:
+    """Insert or update a review for an event_log entry."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO response_reviews (event_id, is_good, routing_correct, notes)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (event_id) DO UPDATE SET
+                   is_good = EXCLUDED.is_good,
+                   routing_correct = EXCLUDED.routing_correct,
+                   notes = EXCLUDED.notes,
+                   reviewed_at = CURRENT_TIMESTAMP
+               RETURNING id""",
+            (event_id, is_good, routing_correct, notes),
+        )
+        review_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        return review_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
+def get_events_for_review(
+    limit: int = 50,
+    reviewed: bool = None,
+) -> List[Dict]:
+    """
+    Get llm_response events with review status.
+
+    Args:
+        limit: Max rows
+        reviewed: None=all, True=only reviewed, False=only unreviewed
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        base = """
+            SELECT e.*, r.id AS review_id, r.is_good, r.routing_correct,
+                   r.notes AS review_notes, r.reviewed_at
+            FROM event_log e
+            LEFT JOIN response_reviews r ON r.event_id = e.id
+            WHERE e.event_type = 'llm_response'
+        """
+        if reviewed is True:
+            base += " AND r.id IS NOT NULL"
+        elif reviewed is False:
+            base += " AND r.id IS NULL"
+        base += " ORDER BY e.id DESC LIMIT %s"
+        cursor.execute(base, (limit,))
+        rows = cursor.fetchall()
+        cursor.close()
+        return [dict(r) for r in rows]
+    finally:
+        release_db_connection(conn)
+
+
+def export_reviews() -> List[Dict]:
+    """Export all llm_response events with reviews for paper analysis."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT e.id, e.timestamp, e.severity, e.user_query, e.llm_response,
+                   e.sensor_snapshot, e.sensor_context_filtered, e.sources,
+                   e.routing_mode, e.routing_decision, e.prompt_template,
+                   e.response_time_ms,
+                   r.is_good, r.routing_correct, r.notes AS review_notes,
+                   r.reviewed_at
+            FROM event_log e
+            LEFT JOIN response_reviews r ON r.event_id = e.id
+            WHERE e.event_type = 'llm_response'
+            ORDER BY e.id
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        return [dict(r) for r in rows]
+    finally:
+        release_db_connection(conn)
+
+
 def setup_database():
     """
     Create all tables if they don't exist.
@@ -484,9 +601,10 @@ def setup_database():
         cursor.execute(CREATE_CV_COUNTS_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)
         cursor.execute(MIGRATE_EVENT_LOG_SQL)
+        cursor.execute(CREATE_RESPONSE_REVIEWS_SQL)
         conn.commit()
         cursor.close()
-        print("Database tables created successfully (sensor_readings_colson + cv_counts_colson + event_log)")
+        print("Database tables created successfully (sensor_readings_colson + cv_counts_colson + event_log + response_reviews)")
     finally:
         release_db_connection(conn)
 

@@ -411,11 +411,11 @@ RULES (apply in order, stop at first match):
 status updates) -> INCLUDE
 2. User describes a health/behavior concern (molting, limping, diarrhea, sneezing) \
 NOT as a general knowledge question ("what causes...", "how to...") -> INCLUDE
-3. User mentions air quality/smells (ammonia, stuffy, stinks) NOT encyclopedically -> INCLUDE
+3. User mentions air quality/smells (ammonia, stuffy, stinks, ...) NOT encyclopedically -> INCLUDE
 4. Resource (feeder/waterer) is low/empty AND user mentions food/water/feeder/waterer -> INCLUDE
 5. Any sensor is CRITICAL AND question is about chickens/coop/health/eggs/disease -> INCLUDE
 6. User asks about flock count, egg count, or door/ventilation status -> INCLUDE
-7. General knowledge (breed advice, "what is...", lifecycle) with no personal coop \
+7. General knowledge (breed advice, "what is...", lifecycle, design of a coop) with no personal coop \
 reference -> EXCLUDE
 
 SENSOR STATUS: {sensor_summary}

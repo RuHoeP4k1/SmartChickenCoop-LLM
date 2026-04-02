@@ -37,3 +37,27 @@ export async function getWeather() {
   if (!res.ok) throw new Error(`Weather request failed (${res.status})`)
   return res.json()
 }
+
+export async function getReviewEvents(limit = 50, reviewed = null) {
+  const params = new URLSearchParams({ limit })
+  if (reviewed !== null) params.append('reviewed', reviewed)
+  const res = await fetch(`/reviews?${params}`)
+  if (!res.ok) throw new Error(`Reviews request failed (${res.status})`)
+  return res.json()
+}
+
+export async function submitReview(review) {
+  const res = await fetch('/reviews', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify(review),
+  })
+  if (!res.ok) throw new Error(`Review submit failed (${res.status})`)
+  return res.json()
+}
+
+export async function exportReviews() {
+  const res = await fetch('/reviews/export')
+  if (!res.ok) throw new Error(`Export failed (${res.status})`)
+  return res.json()
+}

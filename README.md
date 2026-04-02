@@ -12,7 +12,7 @@ Raspberry Pi ──serial──> sensor_readings (PostgreSQL)
                                 ▼
 User ──> React (ChatPanel) ──> POST /ask ──> app.py
                                               ├─ sensor_filter.py  → include sensors? (LLM semantic routing)
-                                              ├─ rag_functions.py  → hybrid retrieval (60% semantic / 40% BM25, k=4)
+                                              ├─ rag_functions.py  → hybrid retrieval (70% semantic / 30% BM25, k=4)
                                               ├─ prompts.py        → select SIMPLE / MAIN / EMERGENCY (hybrid design)
                                               ├─ LLM inference     → ministral-14b-2512 via OpenRouter
                                               ├─ db_utils.py       → log to event_log
@@ -108,6 +108,9 @@ python scripts/generate_demo_data.py
 | GET | `/health` | Health check |
 | POST | `/setup-db` | Create database tables |
 | GET | `/api/info` | API info + endpoint listing |
+| GET | `/reviews` | Browse Q&A events with review status (`?reviewed=true\|false`) |
+| POST | `/reviews` | Submit/update a response review (good/bad + notes) |
+| GET | `/reviews/export` | Export all events + reviews as JSON for paper analysis |
 
 ---
 
@@ -200,10 +203,14 @@ See `evaluation/PHASE2_EVALUATION.md` for full results, human ranking stats, and
 │   ├── rag_functions.py           Hybrid retrieval + LLM inference
 │   ├── sensor_filter.py           Sensor context injection (keyword + LLM routing)
 │   ├── prompts.py                 SIMPLE / MAIN / EMERGENCY prompt templates
-│   ├── db_utils.py                PostgreSQL queries (sensor_readings, event_log)
+│   ├── db_utils.py                PostgreSQL queries (sensor_readings, event_log, response_reviews)
 │   └── scheduler.py              APScheduler — monitors sensors, triggers alerts
 ├── scripts/
-│   └── generate_demo_data.py      Generates demo sensor readings (5 scenarios)
+│   ├── generate_demo_data.py      Generates demo sensor readings (5 scenarios)
+│   ├── export_live_data.py        Export deployment data to CSV for paper
+│   ├── export_evaluation_results.py  Convert eval JSONs to paper-ready CSVs
+│   ├── analyze_live_deployment.py    Summary stats (routing, latency, quality)
+│   └── clear_tables_for_deployment.py  Truncate event_log before going live
 ├── test_docs/                     Knowledge base source documents (PDF/TXT)
 ├── chroma_db/                     Persisted ChromaDB vector store (gitignored)
 ├── frontend/
@@ -215,6 +222,7 @@ See `evaluation/PHASE2_EVALUATION.md` for full results, human ranking stats, and
 │           ├── SensorDashboard.jsx Live sensor cards
 │           ├── SensorChart.jsx    Recharts history (1h/24h/7d)
 │           ├── AlertFeed.jsx      Event log
+│           ├── ResponseReview.jsx Rate live Q&A responses (good/bad + notes)
 │           ├── EggCalendar.jsx    Egg collection calendar
 │           ├── AutomationPanel.jsx Automation rules
 │           ├── Weather.jsx        Open-Meteo forecast

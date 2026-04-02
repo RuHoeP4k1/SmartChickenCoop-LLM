@@ -11,6 +11,7 @@ import Weather from './components/Weather'
 import MyChickens from './components/MyChickens'
 import HeatmapView from './components/HeatmapView'
 import Packages from './components/Packages'
+import ResponseReview from './components/ResponseReview'
 
 const TABS = [
   { id: 'welcome',    label: 'Home' },
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'heatmap',    label: 'Heatmap' },
   { id: 'charts',     label: 'Charts' },
   { id: 'alerts',     label: 'Alerts' },
+  { id: 'review',     label: 'Review' },
   { id: 'eggs',       label: 'Egg Calendar' },
   { id: 'automation', label: 'Automation' },
   { id: 'weather',    label: 'Weather' },
@@ -42,6 +44,7 @@ export default function App() {
         </div>
       </div>
       <div className={activeTab === 'alerts'     ? 'h-full' : 'hidden'}><AlertFeed /></div>
+      <div className={activeTab === 'review'     ? 'h-full' : 'hidden'}><ResponseReview /></div>
       <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><EggCalendar /></div>
       <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>

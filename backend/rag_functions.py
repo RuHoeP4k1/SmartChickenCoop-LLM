@@ -6,6 +6,7 @@ Simple functional approach with hybrid retrieval (semantic + keyword)
 import os
 import re
 import json
+import time
 import hashlib
 from pathlib import Path
 from typing import List, Dict
@@ -536,9 +537,13 @@ def answer_query(
         Dictionary with answer, sources, and metadata
     """
 
+    t_start = time.time()
+
     # Step 1: Get sensor data if enabled
     sensor_context = None
     has_critical = False
+    routing_mode = None
+    routing_decision = "disabled"
 
     if use_sensors:
         if sensor_data is None:
@@ -556,6 +561,7 @@ def answer_query(
             else:
                 include = should_include_sensors(query, sensor_data)
 
+            routing_decision = "include" if include else "exclude"
             if include:
                 sensor_context = get_sensor_context(sensor_data)
 
@@ -579,12 +585,15 @@ def answer_query(
         sensor_context=sensor_context,
         has_critical=has_critical,
     )
+    prompt_template = "emergency" if has_critical and sensor_context else "standard"
 
     if history_prefix:
         prompt = history_prefix + "\n\n" + prompt
 
     # Step 4: Generate response
     response = generate_response(prompt, model=llm_model)
+
+    response_time_ms = int((time.time() - t_start) * 1000)
 
     return {
         "query": query,
@@ -596,6 +605,10 @@ def answer_query(
         "sensor_context": sensor_context,
         "has_critical": has_critical,
         "retrieval_method": retrieval_method,
+        "routing_mode": routing_mode,
+        "routing_decision": routing_decision,
+        "prompt_template": prompt_template,
+        "response_time_ms": response_time_ms,
     }
 
 

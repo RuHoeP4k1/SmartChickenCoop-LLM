@@ -25,7 +25,8 @@ from backend.rag_functions import (
 from backend.db_utils import (
     get_latest_sensor_reading, setup_database,
     get_recent_readings, get_recent_events, insert_event,
-    get_sensor_history,
+    get_sensor_history, upsert_review, get_events_for_review,
+    export_reviews,
 )
 from backend.sensor_filter import get_sensor_context
 from backend.scheduler import start_scheduler, stop_scheduler
@@ -156,6 +157,13 @@ class QueryResponse(BaseModel):
     retrieval_method: str
 
 
+class ReviewRequest(BaseModel):
+    event_id: int
+    is_good: bool
+    routing_correct: Optional[bool] = None
+    notes: str = ""
+
+
 
 # ---------------------------------------------------------------------------
 # Core endpoints
@@ -221,6 +229,10 @@ def ask_question(request: QueryRequest, _=Depends(verify_key)):
             sensor_snapshot=result["sensor_data"],
             sensor_context_filtered=result["sensor_context"],
             sources=result["sources"],
+            routing_mode=result.get("routing_mode"),
+            routing_decision=result.get("routing_decision"),
+            prompt_template=result.get("prompt_template"),
+            response_time_ms=result.get("response_time_ms"),
         )
     except Exception as e:
         logger.warning(f"Failed to log event: {e}")
@@ -369,6 +381,41 @@ async def upload_heatmap(file: UploadFile = File(...)):
     dest.write_bytes(await file.read())
     logger.info(f"Heatmap received: {filename}")
     return {"url": f"/static/uploads/heatmaps/{filename}", "filename": filename}
+
+
+# ---------------------------------------------------------------------------
+# Review endpoints (for live response evaluation)
+# ---------------------------------------------------------------------------
+
+@app.get("/reviews")
+def get_reviews(limit: int = 50, reviewed: Optional[str] = None):
+    """Get llm_response events with review status for the Review tab."""
+    reviewed_bool = None
+    if reviewed == "true":
+        reviewed_bool = True
+    elif reviewed == "false":
+        reviewed_bool = False
+    events = get_events_for_review(limit=min(limit, 200), reviewed=reviewed_bool)
+    return {"events": events, "count": len(events)}
+
+
+@app.post("/reviews")
+def submit_review(review: ReviewRequest):
+    """Submit or update a review for an event_log entry."""
+    review_id = upsert_review(
+        event_id=review.event_id,
+        is_good=review.is_good,
+        routing_correct=review.routing_correct,
+        notes=review.notes,
+    )
+    return {"id": review_id, "status": "ok"}
+
+
+@app.get("/reviews/export")
+def export_reviews_endpoint():
+    """Export all events + reviews as JSON (frontend converts to CSV)."""
+    rows = export_reviews()
+    return {"data": rows, "count": len(rows)}
 
 
 # Serve uploaded heatmap images as static files

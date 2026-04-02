@@ -17,7 +17,7 @@ It serves as both a reference for teammates and a source for the final report.
 | LLM | `mistralai/ministral-14b-2512` via OpenRouter |
 | Chunk size | 1000 characters |
 | k (retrieved chunks) | 4 |
-| Hybrid weights | 70% BM25 / 30% semantic |
+| Hybrid weights | 70% semantic / 30% BM25 |
 | **Combined score** | **0.9667** (actionability: 0.990, correctness: 0.943) |
 
 ### Key Findings
