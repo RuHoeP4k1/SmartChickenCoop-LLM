@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -29,9 +30,9 @@ from risk_calculation import (
     compute_current_mold_risk_from_state,
 )
 
-SENSOR_TABLE = "sensor_readings_colson"
-RISK_SNAPSHOT_TABLE = "risk_snapshots"
-CV_COUNT_TABLE = "cv_counts_colson"
+SENSOR_TABLE = os.getenv("SENSOR_TABLE", "sensor_readings_colson")
+RISK_SNAPSHOT_TABLE = os.getenv("RISK_SNAPSHOT_TABLE", "risk_snapshots")
+CV_COUNT_TABLE = os.getenv("CV_COUNT_TABLE", "cv_counts_colson")
 
 RECENT_READING_LIMIT = 12
 CONTROL_INTERVAL_MINUTES = 10
@@ -116,7 +117,16 @@ def read_previous_mold_state(client: Client) -> Dict[str, Any]:
     }
 
 
-def write_risk_snapshot(client: Client, heat_risk: dict, mold_risk: dict) -> None:
+def write_risk_snapshot(
+    client: Client,
+    heat_risk: dict,
+    mold_risk: dict,
+    fan_rate_m3h: float | None = None,
+    prev_rate_m3h: float | None = None,
+    decision_reason: str | None = None,
+    scenario_name: str | None = None,
+    cycle_index: int | None = None,
+) -> None:
     """Insert one new append-only heat and mold snapshot row."""
     payload = {
         "heat_risk_score": heat_risk["risk_score"],
@@ -133,6 +143,11 @@ def write_risk_snapshot(client: Client, heat_risk: dict, mold_risk: dict) -> Non
         "mold_dmdt_per_24h": mold_risk["mold_dmdt_per_24h"],
         "mold_rhcrit": mold_risk["mold_rhcrit"],
         "mold_mmax": mold_risk["mold_mmax"],
+        "fan_rate_m3h": fan_rate_m3h,
+        "prev_rate_m3h": prev_rate_m3h,
+        "decision_reason": decision_reason,
+        "scenario_name": scenario_name,
+        "cycle_index": cycle_index,
     }
 
     try:
@@ -208,8 +223,6 @@ def main() -> None:
         log.error("Mold risk calculation failed: %s", exc)
         return
 
-    write_risk_snapshot(client, heat_risk, mold_risk)
-
     prev_rate, initialised = load_state()
     rate, reason = compute_fan_rate(
         sensors=sensors,
@@ -219,6 +232,17 @@ def main() -> None:
         n_birds=n_birds,
         prev_rate=prev_rate,
         initialised=initialised,
+    )
+
+    write_risk_snapshot(
+        client,
+        heat_risk,
+        mold_risk,
+        fan_rate_m3h=rate,
+        prev_rate_m3h=prev_rate,
+        decision_reason=reason,
+        scenario_name=readings[0].get("scenario_name"),
+        cycle_index=readings[0].get("cycle_index"),
     )
 
     log.info("Result    rate=%.0f m3/h", rate)

@@ -7,9 +7,10 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
 from supabase import Client, create_client
-SENSOR_TABLE = "sensor_readings_colson"
-RISK_SNAPSHOT_TABLE = "risk_snapshots"
-CV_COUNT_TABLE = "cv_counts_colson"
+
+SENSOR_TABLE = os.getenv("SENSOR_TABLE", "sensor_readings_colson")
+RISK_SNAPSHOT_TABLE = os.getenv("RISK_SNAPSHOT_TABLE", "risk_snapshots")
+CV_COUNT_TABLE = os.getenv("CV_COUNT_TABLE", "cv_counts_colson")
 
 RECENT_READING_LIMIT = 12
 DEFAULT_INTERVAL_MINUTES = 10

@@ -22,9 +22,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-SENSOR_TABLE = "sensor_readings_colson"
-RISK_SNAPSHOT_TABLE = "risk_snapshots"
-CV_COUNT_TABLE = "cv_counts_colson"
+SENSOR_TABLE = os.getenv("SENSOR_TABLE", "sensor_readings_colson")
+RISK_SNAPSHOT_TABLE = os.getenv("RISK_SNAPSHOT_TABLE", "risk_snapshots")
+CV_COUNT_TABLE = os.getenv("CV_COUNT_TABLE", "cv_counts_colson")
 
 COOP_LAT = float(os.environ.get("COOP_LATITUDE", "50.864403"))
 COOP_LON = float(os.environ.get("COOP_LONGITUDE", "4.686699"))
