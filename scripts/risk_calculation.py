@@ -7,7 +7,6 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
 from supabase import Client, create_client
-
 SENSOR_TABLE = "sensor_readings_colson"
 RISK_SNAPSHOT_TABLE = "risk_snapshots"
 CV_COUNT_TABLE = "cv_counts_colson"
@@ -342,10 +341,20 @@ def compute_current_mold_risk_from_state(
         state=state,
         params=params,
     )
+    contributing_factors = build_mold_contributing_factors(
+        rh=humidity_pct,
+        rhcrit=result.rhcrit,
+        favourable_for_growth=result.favourable_for_growth,
+        dmdt_per_24h=result.dmdt_per_24h,
+        consecutive_unfavourable_minutes=state.consecutive_unfavourable_minutes,
+        m=result.m,
+        mmax=result.mmax,
+    )
 
     return {
         "mold_index_m": result.m,
         "mold_risk_level": result.mold_risk_level,
+        "contributing_factors": contributing_factors,
         "mold_favourable_for_growth": result.favourable_for_growth,
         "mold_consecutive_unfavourable_minutes": state.consecutive_unfavourable_minutes,
         "mold_dmdt_per_24h": result.dmdt_per_24h,
@@ -427,6 +436,53 @@ class VTTStepResult:
     rhcrit: float
     mmax: float
     favourable_for_growth: bool
+
+
+def build_mold_contributing_factors(
+    *,
+    rh: float,
+    rhcrit: float,
+    favourable_for_growth: bool,
+    dmdt_per_24h: float,
+    consecutive_unfavourable_minutes: int,
+    m: float,
+    mmax: float,
+) -> List[str]:
+    """Build short human-readable factors for the current mold snapshot."""
+    contributing_factors: List[str] = []
+
+    if favourable_for_growth:
+        contributing_factors.append("Relative humidity above critical mold threshold")
+        contributing_factors.append("Conditions currently favourable for mold growth")
+    else:
+        contributing_factors.append("Relative humidity below critical mold threshold")
+        if consecutive_unfavourable_minutes >= 60:
+            contributing_factors.append(
+                "Long period of unfavourable conditions slowed mold growth"
+            )
+        else:
+            contributing_factors.append("Conditions currently unfavourable for mold growth")
+
+    if dmdt_per_24h > 0:
+        contributing_factors.append("Mold index increasing")
+    elif dmdt_per_24h < 0:
+        contributing_factors.append("Mold index decreasing")
+    else:
+        contributing_factors.append("Mold index stable")
+
+    if m < 1.0:
+        contributing_factors.append("Mold risk remains low - no immediate action needed")
+    elif m < 2.5:
+        contributing_factors.append("Early mold activity detected - take preventive measures")
+    elif m < 3.5:
+        contributing_factors.append("Established mold  risk - take immediate action to mitigate")
+    else:
+        contributing_factors.append("Severe mold risk - critical for chicken health")
+
+    if favourable_for_growth and mmax > 0 and m >= 0.8 * mmax:
+        contributing_factors.append("Mold index already near current growth ceiling")
+
+    return contributing_factors
 
 
 def get_sensitivity_params(level: SensitivityLevel) -> SensitivityParams:
