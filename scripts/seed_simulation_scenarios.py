@@ -29,7 +29,7 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-def build_scenarios() -> Dict[str, Dict[str, float]]:
+def build_scenarios() -> Dict[str, Dict[str, Any]]:
     """Return the simple indoor-only simulation scenarios."""
     return {
         "baseline": {
@@ -68,12 +68,28 @@ def build_scenarios() -> Dict[str, Dict[str, float]]:
             "co2_ppm": 900.0,
             "h2s_ppm": 0.0,
         },
+        "thi_streak_warmup": {
+            "series": [
+                {"temperature_c": 16.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 17.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 18.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 62.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 22.0, "humidity_pct": 64.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 24.0, "humidity_pct": 66.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 26.0, "humidity_pct": 68.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 27.0, "humidity_pct": 70.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 28.0, "humidity_pct": 72.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 29.0, "humidity_pct": 74.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 30.0, "humidity_pct": 76.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 31.0, "humidity_pct": 78.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+            ],
+        },
     }
 
 
 def build_sensor_rows(
     scenario_name: str,
-    scenario_values: Dict[str, float],
+    scenario_values: Dict[str, Any],
     cycle_count: int = CONTROL_CYCLES,
     interval_minutes: int = CONTROL_INTERVAL_MINUTES,
 ) -> List[Dict[str, Any]]:
@@ -81,17 +97,22 @@ def build_sensor_rows(
     end_time = datetime.now(timezone.utc).replace(microsecond=0)
     start_time = end_time - timedelta(minutes=interval_minutes * (cycle_count - 1))
     notes = f"Simple indoor-only simulation seed for scenario '{scenario_name}'."
+    if scenario_name == "thi_streak_warmup":
+        notes = "Indoor-only warmup scenario to test THI streak buildup."
     rows: List[Dict[str, Any]] = []
 
     for cycle_index in range(cycle_count):
         timestamp = start_time + timedelta(minutes=interval_minutes * cycle_index)
+        row_values = scenario_values
+        if scenario_name == "thi_streak_warmup":
+            row_values = scenario_values["series"][cycle_index]
         rows.append(
             {
                 "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
-                "temperature_c": scenario_values["temperature_c"],
-                "humidity_pct": scenario_values["humidity_pct"],
-                "co2_ppm": scenario_values["co2_ppm"],
-                "h2s_ppm": scenario_values["h2s_ppm"],
+                "temperature_c": row_values["temperature_c"],
+                "humidity_pct": row_values["humidity_pct"],
+                "co2_ppm": row_values["co2_ppm"],
+                "h2s_ppm": row_values["h2s_ppm"],
                 "scenario_name": scenario_name,
                 "cycle_index": cycle_index,
                 "notes": notes,

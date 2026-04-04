@@ -261,7 +261,7 @@ def compute_heat_risk(
 
     thi = _calculate_thi(temperature_c, humidity_pct)
 
-    if thi < 18:
+    if thi < 17:
         score = 0.0
         contributing_factors.append("THI within optimal range")
     elif thi < 20:
