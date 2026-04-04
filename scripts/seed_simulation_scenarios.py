@@ -84,6 +84,22 @@ def build_scenarios() -> Dict[str, Dict[str, Any]]:
                 {"temperature_c": 31.0, "humidity_pct": 78.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
             ],
         },
+        "co2_spike_mid": {
+            "series": [
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
+            ],
+        },
     }
 
 
@@ -99,12 +115,14 @@ def build_sensor_rows(
     notes = f"Simple indoor-only simulation seed for scenario '{scenario_name}'."
     if scenario_name == "thi_streak_warmup":
         notes = "Indoor-only warmup scenario to test THI streak buildup."
+    if scenario_name == "co2_spike_mid":
+        notes = "Indoor-only scenario with one mid-series CO2 spike."
     rows: List[Dict[str, Any]] = []
 
     for cycle_index in range(cycle_count):
         timestamp = start_time + timedelta(minutes=interval_minutes * cycle_index)
         row_values = scenario_values
-        if scenario_name == "thi_streak_warmup":
+        if scenario_name in {"thi_streak_warmup", "co2_spike_mid"}:
             row_values = scenario_values["series"][cycle_index]
         rows.append(
             {

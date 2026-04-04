@@ -290,12 +290,13 @@ def compute_fan_rate(
         return VENT_MAX, f"H2S EMERGENCY {H2S_in:.1f} ppm - fan at maximum"
 
     if CO2_in is not None:
-        num = CO2_in - CO2_AMBIENT
-        den = CO2_TARGET - CO2_AMBIENT
-        if den > 0 and num > 0:
-            vr_co2 = prev_rate * (num / den)
+        if CO2_in <= CO2_TARGET:
+            vr_co2 = 10.0
+        elif CO2_in >= 3500.0:
+            vr_co2 = VENT_MAX
         else:
-            vr_co2 = VENT_MIN
+            co2_fraction = (CO2_in - CO2_TARGET) / (3500.0 - CO2_TARGET)
+            vr_co2 = 10.0 + co2_fraction * (VENT_MAX - 10.0)
         notes.append(f"CO2={CO2_in:.0f} ppm -> floor {vr_co2:.0f} m3/h")
     else:
         vr_co2 = co2_seed_rate(n_birds)
