@@ -33,7 +33,7 @@ def build_scenarios() -> Dict[str, Dict[str, Any]]:
     """Return the simple indoor-only simulation scenarios."""
     return {
         "baseline": {
-            "temperature_c": 20.0,
+            "temperature_c": 16.0,
             "humidity_pct": 60.0,
             "co2_ppm": 800.0,
             "h2s_ppm": 0.0,

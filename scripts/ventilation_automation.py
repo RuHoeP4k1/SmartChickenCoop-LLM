@@ -31,6 +31,7 @@ COOP_LON = float(os.environ.get("COOP_LONGITUDE", "4.686699"))
 
 VENT_MAX = 150.0
 VENT_MIN = 0.0
+MIN_VENTILATION_THRESHOLD = 0.0  # user-defined baseline ventilation (m3/h)
 MAX_SLEW = 50.0
 
 T_MIN = 16.0
@@ -272,7 +273,7 @@ def compute_fan_rate(
     Compute the fan rate [m3/h] for this cycle.
 
     Priority order:
-    HARD H2S emergency -> CO2 floor -> heat -> humidity -> cold clamp.
+    HARD H2S emergency -> CO2 floor (min = MIN_VENTILATION_THRESHOLD) -> heat -> humidity -> cold clamp.
     """
     T_in = sensors["T_in"]
     RH_in = sensors["RH_in"]
@@ -291,12 +292,12 @@ def compute_fan_rate(
 
     if CO2_in is not None:
         if CO2_in <= CO2_TARGET:
-            vr_co2 = 10.0
+            vr_co2 = MIN_VENTILATION_THRESHOLD  # avoids absurdly low rates and influences the next-rate calculation
         elif CO2_in >= 3500.0:
             vr_co2 = VENT_MAX
         else:
             co2_fraction = (CO2_in - CO2_TARGET) / (3500.0 - CO2_TARGET)
-            vr_co2 = 10.0 + co2_fraction * (VENT_MAX - 10.0)
+            vr_co2 = MIN_VENTILATION_THRESHOLD + co2_fraction * (VENT_MAX - MIN_VENTILATION_THRESHOLD)
         notes.append(f"CO2={CO2_in:.0f} ppm -> floor {vr_co2:.0f} m3/h")
     else:
         vr_co2 = co2_seed_rate(n_birds)
