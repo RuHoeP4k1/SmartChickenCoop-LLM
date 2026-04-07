@@ -24,6 +24,8 @@ frontend/dist/
 
 # Claude Code settings (local only)
 .claude/
+.agents/skills/
+skills-lock.json
 CLAUDE.md
 # Sensor team code (contains hardcoded credentials)
 MONITORING/
