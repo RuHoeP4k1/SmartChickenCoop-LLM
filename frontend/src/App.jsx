@@ -5,7 +5,7 @@ import ChatPanel from './components/ChatPanel'
 import SensorDashboard from './components/SensorDashboard'
 import SensorChart from './components/SensorChart'
 import AlertFeed from './components/AlertFeed'
-import EggCalendar from './components/EggCalendar'
+import CoopLog from './components/CoopLog'
 import AutomationPanel from './components/AutomationPanel'
 import Weather from './components/Weather'
 import MyChickens from './components/MyChickens'
@@ -21,7 +21,7 @@ const TABS = [
   { id: 'charts',     label: 'Charts' },
   { id: 'alerts',     label: 'Alerts' },
   { id: 'review',     label: 'Review' },
-  { id: 'eggs',       label: 'Egg Calendar' },
+  { id: 'eggs',       label: 'Coop Log' },
   { id: 'automation', label: 'Automation' },
   { id: 'weather',    label: 'Weather' },
   { id: 'chickens',   label: 'My Chickens' },
@@ -45,7 +45,7 @@ export default function App() {
       </div>
       <div className={activeTab === 'alerts'     ? 'h-full' : 'hidden'}><AlertFeed /></div>
       <div className={activeTab === 'review'     ? 'h-full' : 'hidden'}><ResponseReview /></div>
-      <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><EggCalendar /></div>
+      <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><CoopLog /></div>
       <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
       <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>

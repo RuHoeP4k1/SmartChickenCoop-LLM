@@ -29,7 +29,58 @@ from backend.sensor_filter import (
     should_include_sensors, get_sensor_context, get_critical_alerts,
     is_environment_query, is_reading_stale, llm_route_sensors,
 )
-from backend.db_utils import get_latest_sensor_reading
+from backend.db_utils import (
+    get_latest_sensor_reading,
+    get_chore_log_in_range,
+    get_automation_windows_in_range,
+)
+
+
+def build_task_context(days_back: int = 14) -> str:
+    """
+    Build an optional task-context block the user can opt into from the chat UI.
+    Includes recent chore entries (formatted via each chore's llm_template) and
+    active automation windows. Returns "" if nothing relevant.
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    start = today - timedelta(days=days_back)
+    lines: List[str] = []
+
+    try:
+        chores = get_chore_log_in_range(start, today)
+    except Exception:
+        chores = []
+    if chores:
+        lines.append("Recent chores:")
+        for c in chores[:10]:
+            entry_date = c.get("entry_date")
+            days_ago = (today - entry_date).days if entry_date else 0
+            items = ", ".join(c.get("checked_items") or []) or "—"
+            tmpl = c.get("llm_template") or "{label} ({days_ago}d ago): {items}"
+            try:
+                line = tmpl.format(
+                    days_ago=days_ago,
+                    items=items,
+                    label=c.get("label", ""),
+                )
+            except Exception:
+                line = f"{c.get('label','chore')} ({days_ago}d ago)"
+            lines.append(f"- {line}")
+
+    try:
+        windows = get_automation_windows_in_range(today, today)
+    except Exception:
+        windows = []
+    if windows:
+        lines.append("Active automation today:")
+        for w in windows:
+            st = w.get("start_time")
+            et = w.get("end_time")
+            span = f"{st}–{et}" if st and et else "all day"
+            lines.append(f"- {w.get('task')}: {span}")
+
+    return "\n".join(lines)
 
 
 # =============================================================================
@@ -516,6 +567,7 @@ def answer_query(
     search_type: str = "mmr",
     weights: list = None,
     llm_model: str = None,
+    include_task_context: bool = False,
 ) -> Dict:
     """
     Complete RAG pipeline: retrieve relevant chunks, build prompt, generate answer.
@@ -586,6 +638,11 @@ def answer_query(
         has_critical=has_critical,
     )
     prompt_template = "emergency" if has_critical and sensor_context else "standard"
+
+    if include_task_context:
+        task_block = build_task_context()
+        if task_block:
+            prompt = f"[Recent coop activity — user-requested]\n{task_block}\n\n" + prompt
 
     if history_prefix:
         prompt = history_prefix + "\n\n" + prompt

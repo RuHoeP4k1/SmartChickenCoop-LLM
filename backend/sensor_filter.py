@@ -14,6 +14,38 @@ STALE_THRESHOLD = timedelta(minutes=30)
 
 
 # =============================================================================
+# Risk level helpers (risk_snapshots text levels)
+# =============================================================================
+# heat_risk_level format from risk_calculation.py:
+#   "LOW - Monitor" | "MEDIUM - Elevated risk - Prepare to act" | "HIGH - Take action now"
+# mold_risk_level format from risk_calculation.py:
+#   "low" | "medium" | "high" | "severe"
+
+def heat_is_critical(level: Optional[str]) -> bool:
+    return bool(level) and level.upper().startswith("HIGH")
+
+
+def heat_is_non_normal(level: Optional[str]) -> bool:
+    return bool(level) and not level.upper().startswith("LOW")
+
+
+def mold_is_critical(level: Optional[str]) -> bool:
+    return (level or "").lower() in ("high", "severe")
+
+
+def mold_is_non_normal(level: Optional[str]) -> bool:
+    v = (level or "").lower()
+    return bool(v) and v != "low"
+
+
+# Back-compat aliases (internal callers may still use the underscore names)
+_heat_is_critical = heat_is_critical
+_heat_is_non_normal = heat_is_non_normal
+_mold_is_critical = mold_is_critical
+_mold_is_non_normal = mold_is_non_normal
+
+
+# =============================================================================
 # Keyword sets
 # =============================================================================
 
@@ -216,11 +248,12 @@ def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
 
     # Rule 4: Critical conditions, but ONLY if the question is about chickens/coop
     # (avoids injecting sensors for "what breed should I get?" when coop is critical)
-    critical_params = [
-        "temperature_status", "humidity_status", "heat_stress_index",
-        "h2s_level", "mold_risk_status",
-    ]
-    has_critical = any(sensor_data.get(p) == "critical" for p in critical_params)
+    critical_params = ["temperature_status", "humidity_status", "h2s_level"]
+    has_critical = (
+        any(sensor_data.get(p) == "critical" for p in critical_params)
+        or _heat_is_critical(sensor_data.get("heat_risk_level"))
+        or _mold_is_critical(sensor_data.get("mold_risk_level"))
+    )
 
     if has_critical and any(kw in query_lower for kw in _CHICKEN_TOPIC_KEYWORDS):
         return True
@@ -270,10 +303,16 @@ def get_sensor_context(sensor_data: Dict) -> str:
         if humidity_pct is not None:
             alerts.append(f"Humidity: {humidity_pct:.0f}% ({humidity_status})")
 
-    # Heat stress (composite)
-    heat_stress = sensor_data.get("heat_stress_index", "normal")
-    if heat_stress != "normal":
-        alerts.append(f"Heat stress: {heat_stress}")
+    # Heat risk (from risk_snapshots) — concise level + THI if notable
+    heat_level = sensor_data.get("heat_risk_level")
+    if _heat_is_non_normal(heat_level):
+        # Strip "- Monitor" / "- Take action now" suffix for compactness
+        level_short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
+        thi = sensor_data.get("thi_current")
+        if thi is not None:
+            alerts.append(f"Heat risk: {level_short} (THI {float(thi):.1f})")
+        else:
+            alerts.append(f"Heat risk: {level_short}")
 
     # Feeder — include percentage when available
     feeder_status = sensor_data.get("feeder_status", "full")
@@ -296,10 +335,10 @@ def get_sensor_context(sensor_data: Dict) -> str:
         ppm_str = f" ({h2s_ppm:.0f} ppm)" if h2s_ppm is not None else ""
         alerts.append(f"H2S gas: {h2s_level}{ppm_str}")
 
-    # Mold risk
-    mold_risk = sensor_data.get("mold_risk_status", "normal")
-    if mold_risk != "normal":
-        alerts.append(f"Mold risk: {mold_risk}")
+    # Mold risk (from risk_snapshots)
+    mold_level = sensor_data.get("mold_risk_level")
+    if _mold_is_non_normal(mold_level):
+        alerts.append(f"Mold risk: {mold_level}")
 
     # Door — only notable when open
     if sensor_data.get("door_open"):
@@ -355,8 +394,10 @@ def get_critical_alerts(sensor_data: Dict) -> list:
         hum = sensor_data.get("humidity_pct", 0)
         critical.append(f"High humidity: {hum:.0f}%")
 
-    if sensor_data.get("heat_stress_index") == "critical":
-        critical.append("Heat stress conditions present")
+    if _heat_is_critical(sensor_data.get("heat_risk_level")):
+        thi = sensor_data.get("thi_current")
+        thi_str = f" (THI {float(thi):.1f})" if thi is not None else ""
+        critical.append(f"High heat stress risk{thi_str}")
 
     if sensor_data.get("feeder_status") == "empty":
         critical.append("Feeder is empty")
@@ -369,8 +410,8 @@ def get_critical_alerts(sensor_data: Dict) -> list:
         ppm_str = f": {ppm:.0f} ppm" if ppm is not None else ""
         critical.append(f"Dangerous H2S gas detected{ppm_str}")
 
-    if sensor_data.get("mold_risk_status") == "critical":
-        critical.append("Critical mold risk conditions")
+    if _mold_is_critical(sensor_data.get("mold_risk_level")):
+        critical.append(f"Critical mold risk ({sensor_data.get('mold_risk_level')})")
 
     return critical
 
@@ -388,13 +429,16 @@ def format_sensor_summary(sensor_data: Dict) -> str:
     parts = []
     parts.append(f"temp={sd.get('temperature_c','?')}C({sd.get('temperature_status','?')})")
     parts.append(f"humidity={sd.get('humidity_pct','?')}%({sd.get('humidity_status','?')})")
-    parts.append(f"heat_stress={sd.get('heat_stress_index','?')}")
+    heat_level = sd.get("heat_risk_level") or "?"
+    heat_short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
+    thi = sd.get("thi_current")
+    parts.append(f"heat_risk={heat_short}" + (f"(THI {float(thi):.1f})" if thi is not None else ""))
     parts.append(f"feeder={sd.get('feeder_status','?')}({sd.get('feeder_pct','?')}%)")
     parts.append(f"waterer={sd.get('waterer_status','?')}({sd.get('waterer_pct','?')}%)")
     h2s_ppm = sd.get("h2s_ppm")
     h2s = sd.get("h2s_level", "?") + (f"({h2s_ppm}ppm)" if h2s_ppm else "")
     parts.append(f"h2s={h2s}")
-    parts.append(f"mold_risk={sd.get('mold_risk_status','?')}")
+    parts.append(f"mold_risk={sd.get('mold_risk_level','?')}")
     parts.append(f"door={'open' if sd.get('door_open') else 'closed'}")
     parts.append(f"chickens={sd.get('number_of_chickens','N/A')}")
     parts.append(f"eggs={sd.get('egg_count', 0)}")
@@ -482,15 +526,16 @@ if __name__ == "__main__":
         "timestamp": _now,
         "temperature_c": 22.3, "temperature_status": "normal",
         "humidity_pct": 55, "humidity_status": "normal",
-        "heat_stress_index": "normal", "feeder_status": "full",
+        "heat_risk_level": "LOW - Monitor", "thi_current": 18.5,
+        "feeder_status": "full",
         "waterer_status": "full", "feeder_pct": 80, "waterer_pct": 75,
-        "h2s_level": "normal", "mold_risk_status": "normal",
+        "h2s_level": "normal", "mold_risk_level": "low",
         "door_open": False,
     }
     critical = {**normal,
         "temperature_c": 35.2, "temperature_status": "critical",
         "humidity_pct": 85, "humidity_status": "critical",
-        "heat_stress_index": "critical",
+        "heat_risk_level": "HIGH - Take action now", "thi_current": 31.2,
         "feeder_status": "empty", "feeder_pct": 2,
         "waterer_status": "empty", "waterer_pct": 3,
     }

@@ -18,10 +18,18 @@ import random
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
-from backend.db_utils import get_latest_sensor_reading, insert_event, insert_sensor_reading, insert_cv_count
-from backend.sensor_filter import get_sensor_context, get_critical_alerts, is_reading_stale
+from backend.db_utils import (
+    get_latest_sensor_reading, insert_event, insert_sensor_reading,
+    insert_cv_count, insert_risk_snapshot,
+)
+from backend.sensor_filter import (
+    get_sensor_context, get_critical_alerts, is_reading_stale,
+    heat_is_critical, mold_is_critical,
+)
 from backend.rag_functions import answer_query
+from backend.egg_reconciliation import reconcile_yesterday
 
 logger = logging.getLogger("chickencareai.scheduler")
 
@@ -75,15 +83,16 @@ def check_sensors():
 
     # Build a dedup key from which sensors are critical — NOT from their values.
     # Using values (e.g. "36.2°C") caused a new alert every tick as readings drifted.
-    _CRITICAL_FIELDS = [
-        "temperature_status", "humidity_status", "heat_stress_index",
-        "h2s_level", "mold_risk_status",
-    ]
+    _CRITICAL_FIELDS = ["temperature_status", "humidity_status", "h2s_level"]
     _EMPTY_FIELDS = ["feeder_status", "waterer_status"]
     active = (
         [f for f in _CRITICAL_FIELDS if reading.get(f) == "critical"] +
-        [f for f in _EMPTY_FIELDS   if reading.get(f) == "empty"]
+        [f for f in _EMPTY_FIELDS if reading.get(f) == "empty"]
     )
+    if heat_is_critical(reading.get("heat_risk_level")):
+        active.append("heat_risk_level")
+    if mold_is_critical(reading.get("mold_risk_level")):
+        active.append("mold_risk_level")
     alert_key = "|".join(sorted(active))
 
     if alert_key == _last_alert_type:
@@ -92,10 +101,10 @@ def check_sensors():
 
     # Determine severity
     temp_critical = reading.get("temperature_status") == "critical"
-    stress_critical = reading.get("heat_stress_index") == "critical"
+    heat_critical = heat_is_critical(reading.get("heat_risk_level"))
     h2s_critical = reading.get("h2s_level") == "critical"
-    mold_critical = reading.get("mold_risk_status") == "critical"
-    severity = "critical" if (temp_critical or stress_critical or h2s_critical or mold_critical) else "warning"
+    mold_critical = mold_is_critical(reading.get("mold_risk_level"))
+    severity = "critical" if (temp_critical or heat_critical or h2s_critical or mold_critical) else "warning"
 
     sensor_context = get_sensor_context(reading)
     logger.warning(f"Scheduler alert [{severity}]: {'; '.join(critical_alerts)}")
@@ -191,13 +200,30 @@ def _classify_humidity(h: float):
     return "normal"
 
 
-def _classify_heat_stress(t: float, h: float):
+_STATUS_TO_HEAT_LEVEL = {
+    "normal": "LOW - Monitor",
+    "warning": "MEDIUM - Elevated risk - Prepare to act",
+    "critical": "HIGH - Take action now",
+}
+_STATUS_TO_MOLD_LEVEL = {
+    "normal": "low",
+    "warning": "medium",
+    "critical": "high",
+}
+
+
+def _sim_heat_status(t: float, h: float) -> str:
     hi = t + 0.33 * h - 4  # simplified heat index
     if hi >= 40 or t >= 35:
         return "critical"
     if hi >= 30 or t >= 28:
         return "warning"
     return "normal"
+
+
+def _sim_thi(t: float, h: float) -> float:
+    """Coarse THI approximation for simulation only."""
+    return round(0.8 * t + (h / 100.0) * (t - 14.4) + 46.4, 1)
 
 
 def _classify_h2s(ppm: float):
@@ -330,27 +356,40 @@ def _sim_insert_reading():
 
     # ---- build reading with derived status fields ----
     # cv data (chickens, eggs) goes to cv_counts_colson via insert_cv_count
+    # heat/mold risk now goes to risk_snapshots via insert_risk_snapshot
     reading = {
         "temperature_c": round(s["temperature_c"], 2),
         "temperature_status": _classify_temp(s["temperature_c"]),
         "humidity_pct": round(s["humidity_pct"], 2),
         "humidity_status": _classify_humidity(s["humidity_pct"]),
-        "heat_stress_index": _classify_heat_stress(s["temperature_c"], s["humidity_pct"]),
         "feeder_pct": round(s["feeder_pct"], 1),
         "feeder_status": _feeder_status(s["feeder_pct"]),
         "waterer_pct": round(s["waterer_pct"], 1),
         "waterer_status": _waterer_status(s["waterer_pct"]),
         "h2s_ppm": round(s["h2s_ppm"], 2),
         "h2s_level": _classify_h2s(s["h2s_ppm"]),
-        "mold_risk_score": round(s["mold_risk_score"], 1),
-        "mold_risk_status": _classify_mold(s["mold_risk_score"]),
         "door_open": s["door_open"],
         "ventilation_on": s["ventilation_on"],
     }
 
+    # Derived risk snapshot (simulation-grade approximation)
+    heat_status = _sim_heat_status(s["temperature_c"], s["humidity_pct"])
+    mold_status = _classify_mold(s["mold_risk_score"])
+    thi = _sim_thi(s["temperature_c"], s["humidity_pct"])
+    heat_score_map = {"normal": 20, "warning": 60, "critical": 90}
+
     try:
         insert_sensor_reading(reading)
         insert_cv_count(s["chickens_inside"], s["egg_count"])
+        insert_risk_snapshot(
+            heat_risk_score=heat_score_map[heat_status],
+            heat_risk_level=_STATUS_TO_HEAT_LEVEL[heat_status],
+            thi_current=thi,
+            mold_risk_score=round(s["mold_risk_score"]),
+            mold_risk_level=_STATUS_TO_MOLD_LEVEL[mold_status],
+            mold_favourable_for_growth=s["humidity_pct"] > 80,
+            contributing_factors=f"sim: temp={reading['temperature_c']}C, rh={reading['humidity_pct']}%",
+        )
         logger.debug(
             f"Sim: T={reading['temperature_c']}°C H={reading['humidity_pct']}% "
             f"feeder={reading['feeder_pct']}% h2s={reading['h2s_ppm']}ppm "
@@ -403,6 +442,22 @@ def start_scheduler(interval_seconds: int = 60, vectordb=None, bm25_retriever=No
             name="Simulation: insert fake reading every 60 s",
             replace_existing=True,
         )
+
+    # Daily egg reconciliation at 23:55 local time.
+    # Preserves manual edits; uses positive-delta sum over cv_counts_colson.
+    def _safe_reconcile():
+        try:
+            reconcile_yesterday()
+        except Exception as e:
+            logger.error(f"Daily egg reconciliation failed: {e}")
+
+    _scheduler.add_job(
+        _safe_reconcile,
+        trigger=CronTrigger(hour=23, minute=55),
+        id="egg_reconcile_daily",
+        name="Daily egg calendar reconciliation",
+        replace_existing=True,
+    )
 
     _scheduler.start()
     mode = "SIMULATION" if simulation_mode else "live"

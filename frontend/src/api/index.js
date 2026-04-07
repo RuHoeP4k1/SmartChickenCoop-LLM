@@ -1,13 +1,88 @@
 const apiKey = import.meta.env.VITE_API_KEY
 const authHeaders = apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
 
-export async function askQuestion(query, history = [], useSensors = true, useHybrid = true) {
+export async function askQuestion(query, history = [], useSensors = true, useHybrid = true, includeTaskContext = false) {
   const res = await fetch('/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify({ query, history, use_sensors: useSensors, use_hybrid: useHybrid }),
+    body: JSON.stringify({
+      query, history,
+      use_sensors: useSensors,
+      use_hybrid: useHybrid,
+      include_task_context: includeTaskContext,
+    }),
   })
   if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  return res.json()
+}
+
+// ---------- Coop Log (eggs, chores, automation) ----------
+
+export async function getEggCalendar(year, month) {
+  const res = await fetch(`/eggs/calendar?year=${year}&month=${month}`)
+  if (!res.ok) throw new Error(`Egg calendar failed (${res.status})`)
+  return res.json()
+}
+
+export async function setEggEntry(isoDate, eggsLaid) {
+  const res = await fetch(`/eggs/calendar/${isoDate}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ eggs_laid: eggsLaid }),
+  })
+  if (!res.ok) throw new Error(`Egg entry failed (${res.status})`)
+  return res.json()
+}
+
+export async function triggerReconcile(isoDate) {
+  const res = await fetch(`/eggs/reconcile?entry_date=${isoDate}`, {
+    method: 'POST', headers: { ...authHeaders },
+  })
+  if (!res.ok) throw new Error(`Reconcile failed (${res.status})`)
+  return res.json()
+}
+
+export async function getChoreDefinitions() {
+  const res = await fetch('/chores/definitions')
+  if (!res.ok) throw new Error(`Chore defs failed (${res.status})`)
+  return res.json()
+}
+
+export async function addChoreLog(entry) {
+  const res = await fetch('/chores/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify(entry),
+  })
+  if (!res.ok) throw new Error(`Chore log failed (${res.status})`)
+  return res.json()
+}
+
+export async function deleteChoreLog(id) {
+  const res = await fetch(`/chores/log/${id}`, { method: 'DELETE', headers: { ...authHeaders } })
+  if (!res.ok) throw new Error(`Chore delete failed (${res.status})`)
+  return res.json()
+}
+
+export async function getAutomationWindows(start, end) {
+  const res = await fetch(`/automation/windows?start=${start}&end=${end}`)
+  if (!res.ok) throw new Error(`Automation fetch failed (${res.status})`)
+  return res.json()
+}
+
+export async function createAutomationWindow(window) {
+  const res = await fetch('/automation/windows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify(window),
+  })
+  if (!res.ok) throw new Error(`Automation create failed (${res.status})`)
+  return res.json()
+}
+
+export async function deleteAutomationWindow(id) {
+  const res = await fetch(`/automation/windows/${id}`, { method: 'DELETE', headers: { ...authHeaders } })
+  if (!res.ok) throw new Error(`Automation delete failed (${res.status})`)
   return res.json()
 }
 

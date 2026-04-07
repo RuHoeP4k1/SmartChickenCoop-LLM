@@ -162,6 +162,7 @@ export default function ChatPanel() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [useSensors, setUseSensors] = useState(true)
+  const [useTaskContext, setUseTaskContext] = useState(false)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -180,7 +181,7 @@ export default function ChatPanel() {
     setLoading(true)
 
     try {
-      const result = await askQuestion(query, history, useSensors)
+      const result = await askQuestion(query, history, useSensors, true, useTaskContext)
       setMessages(prev => [
         ...prev,
         {
@@ -231,6 +232,19 @@ export default function ChatPanel() {
           >
             <span className={`w-1.5 h-1.5 rounded-full ${useSensors ? 'bg-amber-500' : 'bg-stone-400'}`} />
             Sensors {useSensors ? 'on' : 'off'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setUseTaskContext(prev => !prev)}
+            title="Include recent chores & automation windows in the next message"
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              useTaskContext
+                ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-600'
+                : 'bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400 border-stone-300 dark:border-stone-600'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${useTaskContext ? 'bg-emerald-500' : 'bg-stone-400'}`} />
+            Task history {useTaskContext ? 'on' : 'off'}
           </button>
         </div>
         <form onSubmit={submit} className="max-w-3xl mx-auto relative">

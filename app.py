@@ -5,18 +5,22 @@ Run with: uvicorn app:app --reload
 
 import os
 import asyncio
+import calendar
 import logging
 import secrets
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date, time as dtime, timedelta
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field, field_validator, StringConstraints
+from typing import Optional, List, Annotated
+
+# Bounded string type for list elements (prevents unbounded JSONB blobs)
+BoundedStr = Annotated[str, StringConstraints(max_length=200)]
 
 from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
@@ -27,9 +31,17 @@ from backend.db_utils import (
     get_recent_readings, get_recent_events, insert_event,
     get_sensor_history, upsert_review, get_events_for_review,
     export_reviews,
+    upsert_egg_entry, get_egg_entries_for_month,
+    get_chore_definitions, insert_chore_log, delete_chore_log,
+    get_chore_log_in_range,
+    insert_automation_window, delete_automation_window,
+    get_automation_windows_in_range,
+    ALLOWED_AUTOMATION_TASKS,
 )
 from backend.sensor_filter import get_sensor_context
 from backend.scheduler import start_scheduler, stop_scheduler
+from backend.egg_reconciliation import reconcile_day
+from backend.consumption import consumption_for_date
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chickencareai")
@@ -143,6 +155,7 @@ class QueryRequest(BaseModel):
     query: str
     use_sensors: bool = True
     use_hybrid: bool = True
+    include_task_context: bool = False
     history: list[dict] = []
 
 
@@ -217,6 +230,7 @@ def ask_question(request: QueryRequest, _=Depends(verify_key)):
         use_sensors=request.use_sensors,
         use_hybrid=request.use_hybrid,
         history=trimmed_history,
+        include_task_context=request.include_task_context,
     )
 
     # Log to event_log for later evaluation
@@ -416,6 +430,262 @@ def export_reviews_endpoint():
     """Export all events + reviews as JSON (frontend converts to CSV)."""
     rows = export_reviews()
     return {"data": rows, "count": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Coop Log endpoints — eggs, chores, automation windows
+# ---------------------------------------------------------------------------
+
+class EggEntryRequest(BaseModel):
+    eggs_laid: int = Field(ge=0, le=100)
+
+
+class ChoreLogRequest(BaseModel):
+    entry_date: date
+    definition_id: int = Field(ge=1)
+    checked_items: List[BoundedStr] = Field(default_factory=list, max_length=20)
+    notes: str = Field(default="", max_length=500)
+
+
+class AutomationWindowRequest(BaseModel):
+    task: str
+    start_date: date
+    end_date: date
+    start_time: Optional[dtime] = None
+    end_time: Optional[dtime] = None
+    days_of_week: List[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
+
+    @field_validator("task")
+    @classmethod
+    def _task_allowed(cls, v: str) -> str:
+        if v not in ALLOWED_AUTOMATION_TASKS:
+            raise ValueError(f"task must be one of {ALLOWED_AUTOMATION_TASKS}")
+        return v
+
+    @field_validator("days_of_week")
+    @classmethod
+    def _dow_range(cls, v: List[int]) -> List[int]:
+        for d in v:
+            if d < 0 or d > 6:
+                raise ValueError("days_of_week entries must be 0..6 (Sun..Sat)")
+        return v
+
+
+_MAX_AUTOMATION_SPAN_DAYS = 366
+
+
+def _db_error(e: Exception, label: str = "Database error") -> HTTPException:
+    """Log the full exception server-side, return a generic 503 to the client."""
+    logger.warning(f"{label}: {e}")
+    return HTTPException(status_code=503, detail=label)
+
+
+@app.get("/eggs/calendar")
+def get_coop_log_month(
+    year: int = Query(..., ge=2000, le=2100, description="4-digit year"),
+    month: int = Query(..., ge=1, le=12),
+    include_consumption: bool = Query(True),
+):
+    """
+    Return a combined month view for the Coop Log tab:
+    - egg entries (auto-reconciled + manual)
+    - chores logged that month
+    - automation windows overlapping that month
+    - per-day rollup: eggs, chores count, automation hours, feed/water % consumed
+    """
+    days_in_month = calendar.monthrange(year, month)[1]
+    first = date(year, month, 1)
+    last = date(year, month, days_in_month)
+
+    try:
+        eggs = get_egg_entries_for_month(year, month)
+        chores = get_chore_log_in_range(first, last)
+        windows = get_automation_windows_in_range(first, last)
+    except Exception as e:
+        raise _db_error(e)
+
+    # Per-day rollup
+    eggs_by_day = {e["entry_date"].isoformat(): e for e in eggs}
+    chores_by_day: dict[str, list] = {}
+    for c in chores:
+        key = c["entry_date"].isoformat()
+        chores_by_day.setdefault(key, []).append(c)
+
+    today = date.today()
+    rollup = []
+    for day_num in range(1, days_in_month + 1):
+        d = date(year, month, day_num)
+        key = d.isoformat()
+
+        egg_entry = eggs_by_day.get(key)
+        day_chores = chores_by_day.get(key, [])
+
+        # Automation hours active that day
+        auto_hours = 0.0
+        active_tasks = []
+        for w in windows:
+            if w["start_date"] > d or w["end_date"] < d:
+                continue
+            # day-of-week filter (Sun=0..Sat=6 matches Python's .weekday() + 1 % 7)
+            py_dow = (d.weekday() + 1) % 7
+            if py_dow not in (w.get("days_of_week") or []):
+                continue
+            st = w.get("start_time")
+            et = w.get("end_time")
+            if st is None or et is None:
+                hours = 24.0
+            else:
+                hours = ((datetime.combine(d, et) - datetime.combine(d, st)).total_seconds()) / 3600.0
+                if hours < 0:
+                    hours += 24.0
+            auto_hours += hours
+            active_tasks.append(w["task"])
+
+        consumption = {"feeder_pct_consumed": None, "waterer_pct_consumed": None}
+        # Only compute consumption for past days and current day (future = skip)
+        if include_consumption and d <= today:
+            try:
+                consumption = consumption_for_date(d)
+            except Exception as e:
+                logger.warning(f"consumption calc failed for {d}: {e}")
+
+        rollup.append({
+            "date": key,
+            "eggs_laid": egg_entry["eggs_laid"] if egg_entry else 0,
+            "eggs_source": egg_entry["source"] if egg_entry else None,
+            "chore_count": len(day_chores),
+            "chore_labels": [c["label"] for c in day_chores],
+            "automation_hours": round(auto_hours, 1),
+            "automation_tasks": sorted(set(active_tasks)),
+            "feeder_pct_consumed": consumption["feeder_pct_consumed"],
+            "waterer_pct_consumed": consumption["waterer_pct_consumed"],
+        })
+
+    return {
+        "year": year,
+        "month": month,
+        "days": rollup,
+        "chores": chores,
+        "automation_windows": windows,
+    }
+
+
+@app.post("/eggs/calendar/{entry_date}")
+def set_egg_entry(entry_date: date, body: EggEntryRequest):
+    """Manually set (or correct) the egg count for a specific date."""
+    try:
+        upsert_egg_entry(entry_date, body.eggs_laid, source="manual")
+    except Exception as e:
+        raise _db_error(e)
+    return {"status": "ok", "entry_date": entry_date.isoformat(), "eggs_laid": body.eggs_laid}
+
+
+@app.post("/eggs/reconcile")
+def trigger_reconcile(entry_date: Optional[date] = Query(None)):
+    """Manually trigger egg reconciliation for a date (default: yesterday)."""
+    try:
+        eggs = reconcile_day(entry_date)
+    except Exception as e:
+        raise _db_error(e, "Reconciliation failed")
+    return {
+        "status": "ok",
+        "eggs_laid": eggs,
+        "entry_date": (entry_date or (date.today() - timedelta(days=1))).isoformat(),
+    }
+
+
+@app.get("/chores/definitions")
+def list_chore_definitions():
+    """Return all active chore definitions for the 'Add chore' picker."""
+    try:
+        return {"definitions": get_chore_definitions()}
+    except Exception as e:
+        raise _db_error(e)
+
+
+@app.post("/chores/log")
+def add_chore_log(body: ChoreLogRequest):
+    """Record a completed chore for a specific date."""
+    try:
+        log_id = insert_chore_log(
+            entry_date=body.entry_date,
+            definition_id=body.definition_id,
+            checked_items=body.checked_items,
+            notes=body.notes,
+        )
+    except Exception as e:
+        raise _db_error(e)
+    return {"status": "ok", "id": log_id}
+
+
+@app.delete("/chores/log/{log_id}")
+def remove_chore_log(log_id: int):
+    try:
+        removed = delete_chore_log(log_id)
+    except Exception as e:
+        raise _db_error(e)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="chore log entry not found")
+    return {"status": "ok"}
+
+
+@app.get("/automation/windows")
+def list_automation_windows(
+    start: date = Query(...),
+    end: date = Query(...),
+):
+    if end < start:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+    if (end - start).days > _MAX_AUTOMATION_SPAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"date range too large (max {_MAX_AUTOMATION_SPAN_DAYS} days)",
+        )
+    try:
+        return {"windows": get_automation_windows_in_range(start, end)}
+    except Exception as e:
+        raise _db_error(e)
+
+
+@app.post("/automation/windows")
+def create_automation_window(body: AutomationWindowRequest):
+    if body.end_date < body.start_date:
+        raise HTTPException(status_code=400, detail="end_date must be >= start_date")
+    if (body.end_date - body.start_date).days > _MAX_AUTOMATION_SPAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"window too long (max {_MAX_AUTOMATION_SPAN_DAYS} days)",
+        )
+    if (body.start_time is None) != (body.end_time is None):
+        raise HTTPException(
+            status_code=400,
+            detail="start_time and end_time must both be set or both omitted",
+        )
+    try:
+        win_id = insert_automation_window(
+            task=body.task,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            days_of_week=body.days_of_week,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise _db_error(e)
+    return {"status": "ok", "id": win_id}
+
+
+@app.delete("/automation/windows/{win_id}")
+def remove_automation_window(win_id: int):
+    try:
+        removed = delete_automation_window(win_id)
+    except Exception as e:
+        raise _db_error(e)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="automation window not found")
+    return {"status": "ok"}
 
 
 # Serve uploaded heatmap images as static files
