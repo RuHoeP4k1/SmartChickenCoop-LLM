@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -37,6 +38,7 @@ CV_COUNT_TABLE = os.getenv("CV_COUNT_TABLE", "cv_counts_colson")
 RECENT_READING_LIMIT = 12
 CONTROL_INTERVAL_MINUTES = 10
 THI_THRESHOLD = 25.0
+MOLD_STATE_FILE = SCRIPT_DIR / "mold_state.json"
 
 Sensors = Dict[str, Any]
 Reading = Dict[str, Any]
@@ -88,14 +90,36 @@ def log_sensors(sensors: Sensors) -> None:
 
 
 def read_previous_mold_state(client: Client) -> Dict[str, Any]:
-    """Read the latest persisted mold state from the append-only snapshot table."""
-    response = (
-        client.table(RISK_SNAPSHOT_TABLE)
-        .select("mold_index_m,mold_consecutive_unfavourable_minutes")
-        .order("timestamp", desc=True)
-        .limit(1)
-        .execute()
-    )
+    """Read the latest persisted mold state, preferring the precise local file."""
+    if MOLD_STATE_FILE.exists():
+        try:
+            state = json.loads(MOLD_STATE_FILE.read_text())
+            return {
+                "previous_m": float(state.get("previous_m", 0.0) or 0.0),
+                "previous_consecutive_unfavourable_minutes": int(
+                    state.get("previous_consecutive_unfavourable_minutes", 0) or 0
+                ),
+            }
+        except Exception as exc:
+            log.warning("Mold state file unreadable, falling back to snapshots: %s", exc)
+
+    # Fall back to the snapshot table for compatibility when no local state file
+    # is available yet.
+    try:
+        response = (
+            client.table(RISK_SNAPSHOT_TABLE)
+            .select("mold_index_m,mold_consecutive_unfavourable_minutes")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        log.warning("Previous mold state not found, defaulting to zero: %s", exc)
+        return {
+            "previous_m": 0.0,
+            "previous_consecutive_unfavourable_minutes": 0,
+        }
+
     if not response.data:
         return {
             "previous_m": 0.0,
@@ -115,6 +139,21 @@ def read_previous_mold_state(client: Client) -> Dict[str, Any]:
         "previous_m": float(previous_m),
         "previous_consecutive_unfavourable_minutes": int(previous_minutes),
     }
+
+
+def save_mold_state(mold_risk: Dict[str, Any]) -> None:
+    """Persist the precise mold state locally for the next control cycle."""
+    MOLD_STATE_FILE.write_text(
+        json.dumps(
+            {
+                "previous_m": float(mold_risk["mold_index_m"]),
+                "previous_consecutive_unfavourable_minutes": int(
+                    mold_risk["mold_consecutive_unfavourable_minutes"]
+                ),
+            },
+            indent=2,
+        )
+    )
 
 
 def write_risk_snapshot(
@@ -244,6 +283,7 @@ def main() -> None:
         scenario_name=readings[0].get("scenario_name"),
         cycle_index=readings[0].get("cycle_index"),
     )
+    save_mold_state(mold_risk)
 
     log.info("Result    rate=%.0f m3/h", rate)
     log.info("Reason    %s", reason)

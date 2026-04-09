@@ -41,14 +41,14 @@ def build_scenarios() -> Dict[str, Dict[str, Any]]:
         "co2_high": {
             "temperature_c": 20.0,
             "humidity_pct": 60.0,
-            "co2_ppm": 2600.0,
+            "co2_ppm": 3500.0,
             "h2s_ppm": 0.0,
         },
         "h2s_warning": {
             "temperature_c": 20.0,
             "humidity_pct": 60.0,
             "co2_ppm": 900.0,
-            "h2s_ppm": 2.0,
+            "h2s_ppm": 6.0,
         },
         "h2s_emergency": {
             "temperature_c": 20.0,
@@ -92,8 +92,8 @@ def build_scenarios() -> Dict[str, Dict[str, Any]]:
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
-                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
-                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 3000.0, "h2s_ppm": 0.0},
+                {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 3600.0, "h2s_ppm": 0.0},
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 2600.0, "h2s_ppm": 0.0},
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},
                 {"temperature_c": 20.0, "humidity_pct": 60.0, "co2_ppm": 900.0, "h2s_ppm": 0.0},

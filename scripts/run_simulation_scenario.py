@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,8 @@ from seed_simulation_scenarios import (
 RISK_SNAPSHOT_TABLE = "risk_snapshots_simulation"
 CONTROL_CYCLES = 12
 FAN_STATE_FILE = SCRIPT_DIR / "vent_state.json"
+MOLD_STATE_FILE = SCRIPT_DIR / "mold_state.json"
+INITIAL_FAN_RATE = 10.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,16 +95,26 @@ def replace_sensor_rows_up_to_cycle(
     return len(response.data or [])
 
 
-def remove_fan_state_file() -> bool:
-    if not FAN_STATE_FILE.exists():
+def reset_fan_state_file() -> None:
+    FAN_STATE_FILE.write_text(
+        json.dumps({"prev_rate": INITIAL_FAN_RATE, "initialised": True}, indent=2)
+    )
+
+
+def remove_mold_state_file() -> bool:
+    if not MOLD_STATE_FILE.exists():
         return False
-    FAN_STATE_FILE.unlink()
+    MOLD_STATE_FILE.unlink()
     return True
 
 
-def clear_risk_snapshots(client: Any) -> int:
-    response = client.table(RISK_SNAPSHOT_TABLE).delete().gte("id", 0).execute()
+def clear_table(client: Any, table_name: str) -> int:
+    response = client.table(table_name).delete().gte("id", 0).execute()
     return len(response.data or [])
+
+
+def clear_risk_snapshots(client: Any) -> int:
+    return clear_table(client, RISK_SNAPSHOT_TABLE)
 
 
 def run_control_cycle() -> None:
@@ -130,16 +143,22 @@ def main() -> None:
             f"Unknown scenario '{scenario_name}'. Available scenarios: {available}"
         )
 
-    reset_fan_state = args.reset_fan_state or args.reset_all
-    reset_snapshots = args.reset_snapshots or args.reset_all
+    # Every scenario run starts from a clean simulation state so earlier runs
+    # cannot leak history into the 12-cycle replay.
+    reset_fan_state = True
+    reset_snapshots = True
 
     sensor_rows = build_sensor_rows(scenario_name, scenarios[scenario_name])
 
     if args.dry_run:
-        if reset_fan_state:
-            print(f"[dry-run] Would remove {FAN_STATE_FILE.name} if it exists.")
-        if reset_snapshots:
-            print(f"[dry-run] Would clear {RISK_SNAPSHOT_TABLE}.")
+        print(
+            f"[dry-run] Would reset {FAN_STATE_FILE.name} to "
+            f"prev_rate={INITIAL_FAN_RATE:.0f}."
+        )
+        print(f"[dry-run] Would remove {MOLD_STATE_FILE.name} if it exists.")
+        print(f"[dry-run] Would clear {SENSOR_TABLE}.")
+        print(f"[dry-run] Would clear {CV_TABLE}.")
+        print(f"[dry-run] Would clear {RISK_SNAPSHOT_TABLE}.")
 
         for cycle_index in range(len(sensor_rows)):
             current_row = sensor_rows[cycle_index]
@@ -170,15 +189,23 @@ def main() -> None:
     configure_simulation_tables()
     client = get_supabase_client()
 
-    if reset_fan_state:
-        removed = remove_fan_state_file()
-        print(
-            f"Fan state reset: {'removed vent_state.json' if removed else 'file not present'}"
-        )
+    reset_fan_state_file()
+    print(f"Fan state reset: seeded vent_state.json with {INITIAL_FAN_RATE:.0f} m3/h")
 
-    if reset_snapshots:
-        deleted = clear_risk_snapshots(client)
-        print(f"Risk snapshots cleared: {deleted}")
+    mold_state_removed = remove_mold_state_file()
+    print(
+        "Mold state reset: "
+        f"{'removed mold_state.json' if mold_state_removed else 'file not present'}"
+    )
+
+    sensor_deleted = clear_table(client, SENSOR_TABLE)
+    print(f"Simulation sensor rows cleared: {sensor_deleted}")
+
+    cv_deleted = clear_table(client, CV_TABLE)
+    print(f"Simulation CV rows cleared: {cv_deleted}")
+
+    deleted = clear_risk_snapshots(client)
+    print(f"Risk snapshots cleared: {deleted}")
 
     for cycle_index in range(len(sensor_rows)):
         cycle_number = cycle_index + 1
