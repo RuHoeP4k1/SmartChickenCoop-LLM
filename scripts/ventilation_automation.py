@@ -9,6 +9,8 @@ from typing import Any, Dict
 import requests
 from supabase import Client, create_client
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 try:
     from dotenv import load_dotenv
 
@@ -31,10 +33,11 @@ COOP_LON = float(os.environ.get("COOP_LONGITUDE", "4.686699"))
 
 VENT_MAX = 150.0
 VENT_MIN = 0.0
+MIN_VENTILATION_THRESHOLD = 0.0  # user-defined baseline ventilation (m3/h)
 MAX_SLEW = 50.0
 
 T_MIN = 16.0
-T_MAX = 22.0
+T_MAX = 24.0
 RH_MAX = 0.70
 CO2_TARGET = 2000.0
 CO2_AMBIENT = 400.0
@@ -43,9 +46,9 @@ HEAT_RISK_BOOST_1 = 50.0
 HEAT_RISK_BOOST_2 = 75.0
 HEAT_RISK_BOOST_3 = 90.0
 
-HEAT_RISK_MULT_LOW = 1.05
-HEAT_RISK_MULT_MID = 1.10
-HEAT_RISK_MULT_HIGH = 1.15
+HEAT_RISK_MULT_LOW = 1.1
+HEAT_RISK_MULT_MID = 1.2
+HEAT_RISK_MULT_HIGH = 1.3
 
 H2S_WARN = 1.0
 H2S_EMERG = 5.0
@@ -53,7 +56,7 @@ H2S_EMERG = 5.0
 BIRD_WEIGHT_KG = 2.5
 CO2_PER_BIRD_LD = 3.8
 
-STATE_FILE = Path("vent_state.json")
+STATE_FILE = SCRIPT_DIR / "vent_state.json"
 
 Sensors = Dict[str, Any]
 
@@ -272,7 +275,7 @@ def compute_fan_rate(
     Compute the fan rate [m3/h] for this cycle.
 
     Priority order:
-    HARD H2S emergency -> CO2 floor -> heat -> humidity -> cold clamp.
+    HARD H2S emergency -> CO2 floor (min = MIN_VENTILATION_THRESHOLD) -> heat -> humidity -> cold clamp.
     """
     T_in = sensors["T_in"]
     RH_in = sensors["RH_in"]
@@ -282,21 +285,35 @@ def compute_fan_rate(
 
     notes = []
 
+    log.info(
+        "FAN DEBUG start T_in=%.2f RH_in=%.4f T_amb=%.2f RH_amb=%.4f "
+        "heat_risk_score=%.1f prev_rate=%.2f initialised=%s",
+        T_in,
+        RH_in,
+        T_amb,
+        RH_amb,
+        heat_risk_score,
+        prev_rate,
+        initialised,
+    )
+
     if not initialised:
         prev_rate = VENT_MAX / 4.0
         notes.append(f"cold-start seed {prev_rate:.0f} m3/h")
+        log.info("FAN DEBUG cold-start override prev_rate=%.2f", prev_rate)
 
     if H2S_in >= H2S_EMERG:
+        log.info("FAN DEBUG H2S emergency H2S_in=%.2f -> rate=%.2f", H2S_in, VENT_MAX)
         return VENT_MAX, f"H2S EMERGENCY {H2S_in:.1f} ppm - fan at maximum"
 
     if CO2_in is not None:
         if CO2_in <= CO2_TARGET:
-            vr_co2 = 10.0
+            vr_co2 = MIN_VENTILATION_THRESHOLD  # avoids absurdly low rates and influences the next-rate calculation
         elif CO2_in >= 3500.0:
             vr_co2 = VENT_MAX
         else:
             co2_fraction = (CO2_in - CO2_TARGET) / (3500.0 - CO2_TARGET)
-            vr_co2 = 10.0 + co2_fraction * (VENT_MAX - 10.0)
+            vr_co2 = MIN_VENTILATION_THRESHOLD + co2_fraction * (VENT_MAX - MIN_VENTILATION_THRESHOLD)
         notes.append(f"CO2={CO2_in:.0f} ppm -> floor {vr_co2:.0f} m3/h")
     else:
         vr_co2 = co2_seed_rate(n_birds)
@@ -304,13 +321,26 @@ def compute_fan_rate(
 
     vr_co2 = max(VENT_MIN, min(vr_co2, VENT_MAX))
     target = vr_co2
+    log.info(
+        "FAN DEBUG CO2 branch CO2_in=%s vr_co2=%.2f target_after_co2=%.2f",
+        f"{CO2_in:.2f}" if CO2_in is not None else "None",
+        vr_co2,
+        target,
+    )
 
+    heat_target_before = target
+    heat_branch_active = T_in > T_MAX
+    can_cool_result = False
+    dT = T_MAX - T_amb
+    vr_temp = None
+    vr_temp_boosted = None
+    heat_boost = None
     if T_in > T_MAX:
-        if can_cool(T_in, T_amb):
+        can_cool_result = can_cool(T_in, T_amb)
+        if can_cool_result:
             Q_sen, _ = bird_heat_production(n_birds, BIRD_WEIGHT_KG, T_in)
             rho = air_density(T_amb)
             cp = 1005.0
-            dT = T_MAX - T_amb
             if dT > 0:
                 vr_temp = (Q_sen / (rho * cp * dT)) * 3600
                 if heat_risk_score >= HEAT_RISK_BOOST_3:
@@ -331,9 +361,26 @@ def compute_fan_rate(
                         f"T_amb={T_amb:.1f} C, can cool)"
                     )
                     target = vr_temp_boosted
+    log.info(
+        "FAN DEBUG heat branch active=%s can_cool=%s dT=%.2f "
+        "target_before=%.2f vr_temp=%s heat_boost=%s vr_temp_boosted=%s target_after=%.2f",
+        heat_branch_active,
+        can_cool_result,
+        dT,
+        heat_target_before,
+        f"{vr_temp:.2f}" if vr_temp is not None else "None",
+        f"{heat_boost:.2f}" if heat_boost is not None else "None",
+        f"{vr_temp_boosted:.2f}" if vr_temp_boosted is not None else "None",
+        target,
+    )
 
+    humidity_target_before = target
+    humidity_branch_active = RH_in > RH_MAX
+    can_dry_result = False
+    vr_rh = None
     if RH_in > RH_MAX:
-        if can_dry(T_in, RH_in, T_amb, RH_amb):
+        can_dry_result = can_dry(T_in, RH_in, T_amb, RH_amb)
+        if can_dry_result:
             ah_in = absolute_humidity(T_in, RH_in)
             ah_out = absolute_humidity(T_amb, RH_amb)
             ah_tgt = absolute_humidity(T_in, RH_MAX)
@@ -347,20 +394,39 @@ def compute_fan_rate(
                         f"(outdoor AH lower, can dry)"
                     )
                     target = vr_rh
+    log.info(
+        "FAN DEBUG humidity branch active=%s can_dry=%s "
+        "target_before=%.2f vr_rh=%s target_after=%.2f",
+        humidity_branch_active,
+        can_dry_result,
+        humidity_target_before,
+        f"{vr_rh:.2f}" if vr_rh is not None else "None",
+        target,
+    )
 
     if H2S_WARN <= H2S_in < H2S_EMERG:
         boost = VENT_MAX * 0.15 * (H2S_in - H2S_WARN) / max(H2S_WARN, 1e-9)
         target = min(target + boost, VENT_MAX)
         notes.append(f"H2S warning {H2S_in:.1f} ppm -> boost +{boost:.0f} m3/h")
+        log.info("FAN DEBUG H2S warning boost=%.2f target_after_h2s=%.2f", boost, target)
 
     if T_in < T_MIN and target > vr_co2:
         target = vr_co2
         notes.append(
             f"cold stress T={T_in:.1f} C - clamped to CO2 floor {vr_co2:.0f} m3/h"
         )
+        log.info("FAN DEBUG cold clamp applied target=%.2f", target)
 
     delta = max(-MAX_SLEW, min(target - prev_rate, MAX_SLEW))
     rate = max(VENT_MIN, min(prev_rate + delta, VENT_MAX))
+    log.info(
+        "FAN DEBUG final target=%.2f prev_rate=%.2f delta=%.2f final_rate=%.2f notes=%s",
+        target,
+        prev_rate,
+        delta,
+        rate,
+        " | ".join(notes) if notes else "baseline",
+    )
 
     return rate, " | ".join(notes) if notes else "baseline"
 
