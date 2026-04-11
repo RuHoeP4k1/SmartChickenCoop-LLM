@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Layout from './components/Layout'
 import Welcome from './components/Welcome'
 import ChatPanel from './components/ChatPanel'
@@ -14,22 +14,31 @@ import Packages from './components/Packages'
 import ResponseReview from './components/ResponseReview'
 
 const TABS = [
-  { id: 'welcome',    label: 'Home' },
-  { id: 'chat',       label: 'Chat' },
-  { id: 'sensors',    label: 'Sensors' },
-  { id: 'heatmap',    label: 'Heatmap' },
-  { id: 'charts',     label: 'Charts' },
-  { id: 'alerts',     label: 'Alerts' },
-  { id: 'review',     label: 'Review' },
-  { id: 'eggs',       label: 'Coop Log' },
-  { id: 'automation', label: 'Automation' },
-  { id: 'weather',    label: 'Weather' },
-  { id: 'chickens',   label: 'My Chickens' },
-  { id: 'packages',   label: 'Packages' },
+  { id: 'welcome',    label: 'Home',        title: 'ChickenCoopComfort' },
+  { id: 'chat',       label: 'Chat',        title: 'Chat — ChickenCoopComfort' },
+  { separator: true, label: 'live' },
+  { id: 'sensors',    label: 'Sensors',     title: 'Sensors — ChickenCoopComfort' },
+  { id: 'charts',     label: 'Charts',      title: 'Charts — ChickenCoopComfort' },
+  { id: 'alerts',     label: 'Alerts',      title: 'Alerts — ChickenCoopComfort' },
+  { id: 'weather',    label: 'Weather',     title: 'Weather — ChickenCoopComfort' },
+  { separator: true, label: 'coop' },
+  { id: 'eggs',       label: 'Coop Log',    title: 'Coop Log — ChickenCoopComfort' },
+  { id: 'automation', label: 'Automation',  title: 'Automation — ChickenCoopComfort' },
+  { separator: true, label: 'flock' },
+  { id: 'chickens',   label: 'My Chickens', title: 'My Chickens — ChickenCoopComfort' },
+  { id: 'flock',      label: 'Flock',       title: 'Flock — ChickenCoopComfort' },
+  { separator: true, label: 'tools' },
+  { id: 'review',     label: 'Review',      title: 'Review — ChickenCoopComfort' },
+  { id: 'packages',   label: 'Packages',    title: 'Packages — ChickenCoopComfort' },
 ]
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome')
+
+  useEffect(() => {
+    const tab = TABS.find(t => t.id === activeTab)
+    document.title = tab?.title ?? 'ChickenCoopComfort'
+  }, [activeTab])
 
   return (
     <Layout tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab}>
@@ -50,7 +59,7 @@ export default function App() {
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
       <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>
       <div className={activeTab === 'packages'   ? 'h-full' : 'hidden'}><Packages /></div>
-      <div className={activeTab === 'heatmap'    ? 'h-full' : 'hidden'}><HeatmapView /></div>
+      <div className={activeTab === 'flock'      ? 'h-full' : 'hidden'}><HeatmapView /></div>
     </Layout>
   )
 }

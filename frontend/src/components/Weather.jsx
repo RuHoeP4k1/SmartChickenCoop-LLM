@@ -35,7 +35,7 @@ function formatTime(isoStr) {
 
 function SimpleCard({ label, value, unit, sub }) {
   return (
-    <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
+    <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-5 transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
       <div className="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-3">{label}</div>
       <div className="flex items-baseline gap-1.5">
         <span className="text-3xl font-bold tabular-nums text-stone-800 dark:text-stone-100">{value}</span>
@@ -49,7 +49,7 @@ function SimpleCard({ label, value, unit, sub }) {
 function SunCard({ sunrise, sunset, daylightSec }) {
   const hours = daylightSec ? (daylightSec / 3600).toFixed(1) : '—'
   return (
-    <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-5">
+    <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-5">
       <div className="text-xs font-medium text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-4">Daylight · Leuven</div>
       <div className="grid grid-cols-3 gap-4 text-center">
         <div>
@@ -75,7 +75,7 @@ function ForecastRow({ dates, maxTemps, minTemps, precipSums, codes }) {
       <h3 className="text-sm font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-3">3-Day Forecast</h3>
       <div className="grid grid-cols-3 gap-3">
         {dates.map((date, i) => (
-          <div key={date} className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4 text-center">
+          <div key={date} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4 text-center">
             <div className="text-xs font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider mb-2">
               {shortDay(date, i)}
             </div>
@@ -150,14 +150,14 @@ export default function Weather() {
         {data === undefined && !error && (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 animate-pulse">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-28 rounded-2xl bg-stone-200 dark:bg-stone-700" />
+              <div key={i} className="h-28 rounded-xl bg-stone-200 dark:bg-stone-700" />
             ))}
           </div>
         )}
 
         {/* Error */}
         {error && (
-          <div className="rounded-2xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-5 text-red-600 dark:text-red-400 text-sm">
+          <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-5 text-red-600 dark:text-red-400 text-sm">
             Could not load weather data: {error}
           </div>
         )}

@@ -18,7 +18,7 @@ function EventCard({ event }) {
   const hasBody = event.user_query || event.llm_response || event.sensor_context_filtered || sources.length > 0
 
   return (
-    <div className={`rounded-2xl border bg-white dark:bg-stone-800 overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
+    <div className={`rounded-xl border bg-white dark:bg-stone-800 overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
       {/* Card header — always visible */}
       <div
         className={`px-4 py-3 flex items-start justify-between gap-3 ${hasBody ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-700/50 transition-colors' : ''}`}
@@ -30,7 +30,7 @@ function EventCard({ event }) {
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${meta.style}`}>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg border ${meta.style}`}>
                 {meta.label}
               </span>
               <span className={`text-xs font-medium ${SEV_COLOR[event.severity] ?? SEV_COLOR.info}`}>
@@ -171,7 +171,7 @@ export default function AlertFeed() {
         {loading && (
           <div className="space-y-3">
             {[1,2,3].map(i => (
-              <div key={i} className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
+              <div key={i} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
                 <div className="flex items-center gap-3">
                   <div className="skeleton w-6 h-6 rounded-full shrink-0" />
                   <div className="flex-1 space-y-2">
@@ -185,7 +185,7 @@ export default function AlertFeed() {
         )}
 
         {!loading && events.length === 0 && (
-          <div className="text-center text-stone-400 dark:text-stone-500 py-24 text-sm">No events yet.</div>
+          <div className="text-center text-stone-400 dark:text-stone-500 py-24 text-sm">All quiet in the coop.</div>
         )}
 
         <div className="space-y-3 animate-fade-in">

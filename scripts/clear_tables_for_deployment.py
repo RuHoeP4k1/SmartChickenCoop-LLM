@@ -11,10 +11,20 @@ from backend.db_utils import get_db_connection, release_db_connection, setup_dat
 from psycopg2.extras import RealDictCursor
 
 
+_CLEARABLE_TABLES = [
+    "event_log",
+    "response_reviews",
+    "egg_calendar_entries",
+    "chore_log",
+    "automation_windows",
+    "risk_snapshots",
+]
+
+
 def get_row_counts(conn):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     counts = {}
-    for table in ["event_log", "response_reviews"]:
+    for table in _CLEARABLE_TABLES:
         try:
             cur.execute(f"SELECT COUNT(*) AS n FROM {table}")
             counts[table] = cur.fetchone()["n"]
@@ -42,8 +52,8 @@ def main():
             print("\nAll tables already empty. Nothing to do.")
             return
 
-        print(f"\nThis will TRUNCATE {total} rows from event_log + response_reviews.")
-        print("sensor_readings_colson and cv_counts_colson will NOT be touched.")
+        print(f"\nThis will TRUNCATE {total} rows from: {', '.join(_CLEARABLE_TABLES)}.")
+        print("sensor_readings_colson, cv_counts_colson, chore_definitions will NOT be touched.")
         confirm = input("Type 'yes' to proceed: ").strip().lower()
         if confirm != "yes":
             print("Aborted.")
@@ -51,7 +61,9 @@ def main():
 
         cur = conn.cursor()
         cur.execute("""
-            TRUNCATE TABLE response_reviews, event_log
+            TRUNCATE TABLE
+                response_reviews, event_log,
+                egg_calendar_entries, chore_log, automation_windows, risk_snapshots
             RESTART IDENTITY CASCADE
         """)
         conn.commit()

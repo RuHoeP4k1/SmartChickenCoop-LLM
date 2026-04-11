@@ -107,7 +107,7 @@ export default function EggCalendar() {
         </div>
 
         {/* Calendar card */}
-        <div className="bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-2xl p-5">
+        <div className="bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl p-5">
 
           {/* Month navigation */}
           <div className="flex items-center justify-between mb-4">

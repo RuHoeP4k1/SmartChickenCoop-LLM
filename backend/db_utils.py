@@ -623,6 +623,21 @@ def insert_risk_snapshot(
         release_db_connection(conn)
 
 
+def get_latest_risk_snapshot() -> Optional[Dict]:
+    """Return the most recent row from risk_snapshots including all columns."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "SELECT * FROM risk_snapshots ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return dict(row) if row else None
+    finally:
+        release_db_connection(conn)
+
+
 # =============================================================================
 # EGG CALENDAR
 # =============================================================================

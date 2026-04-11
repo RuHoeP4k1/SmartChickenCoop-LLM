@@ -51,7 +51,7 @@ function ChickenCard({ chicken }) {
       >
         {/* Front */}
         <div
-          className="absolute inset-0 rounded-2xl border border-stone-200 dark:border-stone-700
+          className="absolute inset-0 rounded-xl border border-stone-200 dark:border-stone-700
                      bg-white dark:bg-stone-800 overflow-hidden shadow-sm
                      flex flex-col items-center justify-center p-6
                      hover:shadow-md hover:-translate-y-0.5 transition-shadow"
@@ -74,19 +74,19 @@ function ChickenCard({ chicken }) {
 
         {/* Back */}
         <div
-          className="absolute inset-0 rounded-2xl border border-stone-200 dark:border-stone-700
-                     bg-white dark:bg-stone-800 overflow-hidden shadow-sm p-6
-                     flex flex-col justify-between"
+          className="absolute inset-0 rounded-xl border border-stone-200 dark:border-stone-700
+                     bg-white dark:bg-stone-800 overflow-y-auto shadow-sm p-6
+                     flex flex-col"
           style={{
             backfaceVisibility: 'hidden',
             transform: 'rotateY(180deg)',
           }}
         >
-          <div>
-            <h3 className="text-lg font-bold text-amber-600 dark:text-amber-400 mb-3">
+          <div className="flex flex-col min-h-0 flex-1">
+            <h3 className="text-lg font-bold text-amber-600 dark:text-amber-400 mb-3 shrink-0">
               {chicken.name}
             </h3>
-            <p className="text-sm text-stone-600 dark:text-stone-300 italic leading-relaxed">
+            <p className="text-sm text-stone-600 dark:text-stone-300 italic leading-relaxed flex-1 overflow-y-auto min-h-0">
               {chicken.bio}
             </p>
           </div>
@@ -117,7 +117,7 @@ function ChickenCard({ chicken }) {
 function AddChickenCard() {
   return (
     <div className="w-full max-w-xs mx-auto">
-      <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-stone-300 dark:border-stone-600
+      <div className="w-full aspect-[3/4] rounded-xl border-2 border-dashed border-stone-300 dark:border-stone-600
                       bg-stone-50 dark:bg-stone-800/50
                       flex flex-col items-center justify-center p-6 text-center
                       hover:border-amber-400 dark:hover:border-amber-500 transition-colors cursor-default">

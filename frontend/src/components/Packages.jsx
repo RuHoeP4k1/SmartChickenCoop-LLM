@@ -1,5 +1,30 @@
 import { useState } from 'react'
-import { Check, X, ShoppingCart } from 'lucide-react'
+
+function IconCheck({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  )
+}
+
+function IconX({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6L6 18M6 6l12 12" />
+    </svg>
+  )
+}
+
+function IconShoppingCart({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+      <path d="M3 6h18" />
+      <path d="M16 10a4 4 0 01-8 0" />
+    </svg>
+  )
+}
 import standardImg from '../assets/pkg_standard.png'
 import comfortImg from '../assets/pkg_comfort.png'
 import predationImg from '../assets/pkg_predation.png'
@@ -119,15 +144,34 @@ const COLOR_MAP = {
 
 function BasicSetCallout() {
   return (
-    <div className="mb-12 rounded-2xl border-2 border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-500/5 p-8">
-      <div className="flex items-start gap-4">
-        <div className="text-4xl">🔧</div>
-        <div>
-          <h3 className="text-lg font-bold text-amber-900 dark:text-amber-100 mb-2">Basic Set Required</h3>
-          <p className="text-amber-800 dark:text-amber-200 text-sm mb-2">€150</p>
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            Every package requires the Basic Set (circuit, cabling & casing). This is the foundation that all packages build upon.
+    <div className="mb-10 relative overflow-hidden rounded-xl border border-stone-200 dark:border-amber-900/40 bg-white dark:bg-stone-900 shadow-sm">
+      {/* Left accent bar */}
+      <div className="absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-amber-500 via-amber-400 to-amber-600" />
+
+      <div className="flex items-start gap-4 pl-7 pr-6 py-5">
+        {/* Icon */}
+        <div className="shrink-0 flex items-center justify-center w-10 h-10 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-950/40">
+          <svg className="w-5 h-5 text-amber-600 dark:text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+          </svg>
+        </div>
+
+        {/* Text */}
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100 mb-0.5">
+            Basic Set Required
+          </h3>
+          <p className="text-sm text-stone-500 dark:text-stone-400 leading-relaxed">
+            Every package requires the Basic Set (circuit, cabling &amp; casing) — the foundation all packages build on.
           </p>
+        </div>
+
+        {/* Price badge */}
+        <div className="shrink-0 flex flex-col items-end justify-center ml-4">
+          <div className="rounded-lg border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-950/30 px-4 py-2 text-center">
+            <span className="block text-xl font-bold text-amber-700 dark:text-amber-400">€150</span>
+            <span className="block text-[10px] font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wide">one-time</span>
+          </div>
         </div>
       </div>
     </div>
@@ -140,7 +184,7 @@ function PackageCard({ pkg, onSelect }) {
   return (
     <div
       onClick={() => onSelect(pkg)}
-      className={`cursor-pointer rounded-2xl border ${colors.border} ${colors.bg} p-6
+      className={`cursor-pointer rounded-xl border ${colors.border} ${colors.bg} p-6
                    hover:shadow-lg hover:-translate-y-1 transition-all duration-200
                    flex flex-col h-full`}
     >
@@ -185,7 +229,7 @@ function PackageCard({ pkg, onSelect }) {
         <ul className="text-sm space-y-2">
           {pkg.features.slice(0, 3).map((feature, i) => (
             <li key={i} className="text-stone-600 dark:text-stone-400 flex items-center gap-2">
-              <Check className="w-4 h-4" /> {feature}
+              <IconCheck className="w-4 h-4" /> {feature}
             </li>
           ))}
           {pkg.features.length > 3 && (
@@ -247,7 +291,7 @@ function PackageDetailPanel({ pkg, isOpen, onClose }) {
               onClick={onClose}
               className="text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 transition-colors"
             >
-              <X className="w-6 h-6" />
+              <IconX className="w-6 h-6" />
             </button>
           </div>
         </div>
@@ -276,7 +320,7 @@ function PackageDetailPanel({ pkg, isOpen, onClose }) {
         {/* Footer CTA */}
         <div className="border-t border-stone-200 dark:border-stone-700 p-6">
           <button className={`w-full py-3 rounded-lg font-bold text-white flex items-center justify-center gap-2 ${colors.accent} hover:opacity-90 transition-opacity`}>
-            <ShoppingCart className="w-5 h-5" />
+            <IconShoppingCart className="w-5 h-5" />
             Get Started
           </button>
           <p className="text-xs text-stone-500 dark:text-stone-400 text-center mt-3">

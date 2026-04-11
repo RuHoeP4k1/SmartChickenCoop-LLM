@@ -37,6 +37,7 @@ from backend.db_utils import (
     insert_automation_window, delete_automation_window,
     get_automation_windows_in_range,
     ALLOWED_AUTOMATION_TASKS,
+    get_latest_risk_snapshot,
 )
 from backend.sensor_filter import get_sensor_context
 from backend.scheduler import start_scheduler, stop_scheduler
@@ -339,6 +340,20 @@ def get_history(
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
     return {"readings": readings, "range": range, "count": len(readings)}
+
+
+@app.get("/risk/latest")
+def get_risk_latest():
+    """Return the most recent risk snapshot (heat + mold + ventilation metrics)."""
+    try:
+        snapshot = get_latest_risk_snapshot()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="No risk snapshot available")
+
+    return {"snapshot": snapshot}
 
 
 @app.get("/weather")

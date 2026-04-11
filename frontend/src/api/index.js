@@ -136,3 +136,10 @@ export async function exportReviews() {
   if (!res.ok) throw new Error(`Export failed (${res.status})`)
   return res.json()
 }
+
+export async function getRiskLatest() {
+  const res = await fetch('/risk/latest')
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`Risk fetch failed (${res.status})`)
+  return res.json()
+}

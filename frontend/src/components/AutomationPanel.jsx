@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getSensors } from '../api'
+import { getSensors, getRiskLatest } from '../api'
 
 function Toggle({ enabled, onChange }) {
   return (
@@ -48,6 +48,7 @@ function SensorBadge({ label, value, status }) {
 
 export default function AutomationPanel() {
   const [sensorData, setSensorData] = useState(undefined)
+  const [riskData, setRiskData] = useState(null)
   const [error, setError] = useState(null)
   const [toggles, setToggles] = useState(() => {
     try { return JSON.parse(localStorage.getItem('automation_toggles') || '{}') }
@@ -57,8 +58,9 @@ export default function AutomationPanel() {
   useEffect(() => {
     async function load() {
       try {
-        const result = await getSensors()
-        setSensorData(result)
+        const [sensors, risk] = await Promise.all([getSensors(), getRiskLatest()])
+        setSensorData(sensors)
+        setRiskData(risk?.snapshot ?? null)
         setError(null)
       } catch (err) { setError(err.message) }
     }
@@ -95,7 +97,7 @@ export default function AutomationPanel() {
         {sensorData === undefined && !error && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {[1, 2].map(i => (
-              <div key={i} className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6">
+              <div key={i} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6">
                 <div className="skeleton h-4 w-40 mb-6" />
                 <div className="skeleton h-6 w-24 mb-4" />
                 <div className="skeleton h-16 w-full" />
@@ -109,7 +111,7 @@ export default function AutomationPanel() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
             {/* Door Automation */}
-            <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
+            <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">🚪</span>
@@ -155,7 +157,7 @@ export default function AutomationPanel() {
             </div>
 
             {/* Ventilation Automation */}
-            <div className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
+            <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">🌀</span>
@@ -199,6 +201,25 @@ export default function AutomationPanel() {
                 <SensorBadge label="Mold risk" value={r.mold_risk_status} status={r.mold_risk_status} />
                 <SensorBadge label="Heat stress" value={r.heat_stress_index} status={r.heat_stress_index} />
               </div>
+
+              {/* Fan rate from risk snapshot */}
+              {riskData?.fan_rate_m3h != null && (
+                <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-700">
+                  <span className="text-xl font-bold text-stone-800 dark:text-stone-100">
+                    {Math.round(riskData.fan_rate_m3h)} m³/h
+                  </span>
+                  {riskData.decision_reason && (
+                    <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5 leading-relaxed">
+                      {riskData.decision_reason}
+                    </p>
+                  )}
+                  {riskData.created_at && (
+                    <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-1">
+                      {new Date(riskData.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

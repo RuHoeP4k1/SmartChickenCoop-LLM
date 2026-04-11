@@ -9,7 +9,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timedelta
 import math
 import random
-from backend.db_utils import insert_sensor_reading, insert_cv_count, setup_database
+from backend.db_utils import (
+    insert_sensor_reading, insert_cv_count, setup_database,
+    insert_risk_snapshot, upsert_egg_entry, get_chore_definitions as _get_chore_defs,
+    insert_chore_log, insert_automation_window,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +320,89 @@ def show_latest_reading():
     print(f"Ventilation on: {latest.get('ventilation_on', 'N/A')}")
 
 
+def seed_risk_snapshots():
+    """
+    Insert a few demo risk_snapshots (Pi normally writes these).
+    All get current timestamp; good enough for dev/demo.
+    """
+    samples = [
+        # (heat_score, heat_level, thi, mold_score, mold_level, mfg, contrib)
+        (1, "LOW - Monitor",                             21.5, 1, "low",    False, "Normal temperature and humidity"),
+        (2, "MEDIUM - Elevated risk - Prepare to act",   25.8, 2, "medium", True,  "High humidity sustained"),
+        (1, "LOW - Monitor",                             20.1, 1, "low",    False, "Conditions normal"),
+        (3, "HIGH - Take action now",                    29.4, 2, "medium", True,  "THI above threshold, sustained heat"),
+        (1, "LOW - Monitor",                             18.9, 1, "low",    False, "Night conditions stable"),
+    ]
+    for hs, hl, thi, ms, ml, mfg, contrib in samples:
+        insert_risk_snapshot(
+            heat_risk_score=hs,
+            heat_risk_level=hl,
+            thi_current=thi,
+            high_thi_streak_minutes=0,
+            mold_risk_score=ms,
+            mold_risk_level=ml,
+            mold_favourable_for_growth=mfg,
+            mold_index_m=0,
+            mold_consecutive_unfavourable_minutes=0,
+            contributing_factors=contrib,
+        )
+    print(f"[OK] Inserted {len(samples)} risk snapshots")
+
+
+def seed_coop_log():
+    """
+    Seed egg_calendar_entries, a few chore log entries, and one automation window.
+    Safe to run multiple times (upsert_egg_entry uses ON CONFLICT DO UPDATE).
+    """
+    from datetime import date, timedelta, datetime, time as dtime
+
+    today = date.today()
+
+    # ── Egg entries (last 7 days) ──
+    counts = [8, 7, 9, 6, 10, 8, 7]
+    for i, n in enumerate(counts):
+        d = today - timedelta(days=6 - i)
+        upsert_egg_entry(d, n, source="auto")
+    # Today manual override
+    upsert_egg_entry(today, 5, source="manual")
+    print(f"[OK] Seeded egg_calendar_entries (7 days + today manual)")
+
+    # ── Chore log entries ──
+    defs = _get_chore_defs()
+    def_by_label = {d["label"]: d["id"] for d in defs}
+
+    chore_seeds = [
+        (today - timedelta(days=5), "Cleaned coop",       ["Swept floor", "Removed droppings"], "Quick clean"),
+        (today - timedelta(days=3), "Refilled feed",       ["Checked expiry"], ""),
+        (today - timedelta(days=3), "Refilled water",      [], ""),
+        (today - timedelta(days=1), "Health check",        ["Eyes clear", "Feathers OK"], "All good"),
+        (today,                     "Treated for parasites", ["Applied powder"], "Routine"),
+    ]
+    inserted = 0
+    for entry_date, label, items, notes in chore_seeds:
+        def_id = def_by_label.get(label)
+        if def_id is None:
+            continue
+        insert_chore_log(entry_date, def_id, items, notes)
+        inserted += 1
+    print(f"[OK] Seeded {inserted} chore log entries")
+
+    # ── One automation window: ventilation Mon–Fri, 10:00–18:00, next 30 days ──
+    end = today + timedelta(days=30)
+    try:
+        insert_automation_window(
+            task="ventilation",
+            start_date=today,
+            end_date=end,
+            start_time=dtime(10, 0),
+            end_time=dtime(18, 0),
+            days_of_week=[1, 2, 3, 4, 5],  # Mon–Fri
+        )
+        print(f"[OK] Added automation window: ventilation Mon–Fri {today} → {end}")
+    except Exception as e:
+        print(f"[SKIP] Automation window: {e}")
+
+
 if __name__ == "__main__":
     
     print("="*70)
@@ -352,13 +439,18 @@ if __name__ == "__main__":
     else:
         generate_simple_test_data()
     
+    # Seed coop log tables and risk snapshots
+    print("\nSeeding Coop Log tables...")
+    seed_risk_snapshots()
+    seed_coop_log()
+
     # Show latest
     show_latest_reading()
-    
+
     print("\n" + "="*70)
-    print("✅ Demo data generation complete!")
+    print("Demo data generation complete!")
     print()
     print("Next steps:")
-    print("  1. Run: python rag_functions.py")
+    print("  1. Run: uvicorn app:app --reload")
     print("  2. Or run: python evaluate_rag.py")
     print("="*70)

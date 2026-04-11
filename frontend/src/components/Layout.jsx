@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTheme } from '../context/ThemeContext'
+import { getSensors, getEggCalendar, getEvents } from '../api'
 import logo from '../assets/chicken_logo_4x.png'
+import CommandPalette from './CommandPalette'
 
 /* ── SVG icon components (lightweight, no deps) ──────────────────── */
 
@@ -128,8 +130,27 @@ function IconChicken({ className }) {
 function IconPackage({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" />
-      <path d="M12 12l-6-3.46M12 12l6-3.46M12 12v8" />
+      <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+      <path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12" />
+    </svg>
+  )
+}
+
+function IconFlock({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+  )
+}
+
+function IconReview({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M9 15l2 2 4-4" />
     </svg>
   )
 }
@@ -147,6 +168,108 @@ const ICON_MAP = {
   weather:    IconCloud,
   chickens:   IconChicken,
   packages:   IconPackage,
+  flock:      IconFlock,
+  review:     IconReview,
+}
+
+/* ── Coop status hook ─────────────────────────────────────────────── */
+
+const STATUS_FIELDS = [
+  'temperature_status',
+  'humidity_status',
+  'h2s_level',
+  'mold_risk_level',
+  'feeder_status',
+  'waterer_status',
+]
+
+function useCoopStatus() {
+  const [status, setStatus] = useState('loading')
+
+  useEffect(() => {
+    let cancelled = false
+
+    function compute(sensors) {
+      if (!sensors) return 'normal'
+      let hasCritical = false
+      let hasWarning = false
+      for (const key of STATUS_FIELDS) {
+        const v = String(sensors[key] ?? '').toLowerCase()
+        if (!v) continue
+        if (v === 'critical' || v === 'empty') hasCritical = true
+        if (v === 'warning' || v === 'low') hasWarning = true
+      }
+      if (hasCritical) return 'critical'
+      if (hasWarning) return 'warning'
+      return 'normal'
+    }
+
+    function poll() {
+      getSensors()
+        .then(data => { if (!cancelled) setStatus(compute(data?.reading)) })
+        .catch(() => { /* keep last status on error */ })
+    }
+
+    poll()
+    const id = setInterval(poll, 30_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  return status
+}
+
+/* ── Footer live data hook ────────────────────────────────────────── */
+
+function useFooterData() {
+  const [temp, setTemp] = useState(null)
+  const [eggsToday, setEggsToday] = useState(null)
+  const [lastAlertAge, setLastAlertAge] = useState(null)
+
+  useEffect(() => {
+    function fetchTemp() {
+      getSensors()
+        .then(data => setTemp(data?.reading?.temperature_c ?? null))
+        .catch(() => {})
+    }
+    fetchTemp()
+    const id = setInterval(fetchTemp, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const now = new Date()
+    const todayISO = now.toISOString().slice(0, 10)
+    getEggCalendar(now.getFullYear(), now.getMonth() + 1)
+      .then(data => {
+        if (cancelled) return
+        const entry = data?.days?.find(d => d.date === todayISO)
+        setEggsToday(entry?.eggs_laid ?? null)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    getEvents(5, 'sensor_alert')
+      .then(data => {
+        if (cancelled) return
+        const events = data?.events ?? []
+        if (events.length === 0) { setLastAlertAge('none'); return }
+        const latest = new Date(events[0].timestamp)
+        const todayStr = new Date().toDateString()
+        if (latest.toDateString() !== todayStr) { setLastAlertAge('none'); return }
+        const secs = Math.floor((Date.now() - latest.getTime()) / 1000)
+        if (secs < 60) setLastAlertAge('just now')
+        else if (secs < 3600) setLastAlertAge(`${Math.floor(secs / 60)}m ago`)
+        else setLastAlertAge(`${Math.floor(secs / 3600)}h ago`)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  return { temp, eggsToday, lastAlertAge }
 }
 
 /* ── Layout ───────────────────────────────────────────────────────── */
@@ -154,7 +277,35 @@ const ICON_MAP = {
 export default function Layout({ tabs, activeTab, onTabChange, children }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const { darkMode, toggleDarkMode } = useTheme()
+  const coopStatus = useCoopStatus()
+  const { temp, eggsToday, lastAlertAge } = useFooterData()
+
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setPaletteOpen(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const footerParts = []
+  if (temp != null) footerParts.push(`${temp.toFixed(1)}°C`)
+  if (eggsToday != null) footerParts.push(`${eggsToday} egg${eggsToday !== 1 ? 's' : ''}`)
+  if (lastAlertAge === 'none') footerParts.push('No alerts today')
+  else if (lastAlertAge != null) footerParts.push(`Last alert ${lastAlertAge}`)
+  const footerStatus = footerParts.join(' · ')
+
+  const statusBarClass = {
+    loading:  'bg-stone-200 dark:bg-stone-700',
+    normal:   'bg-emerald-400',
+    warning:  'bg-amber-400',
+    critical: 'bg-red-400 animate-pulse',
+  }[coopStatus] ?? 'bg-stone-200 dark:bg-stone-700'
 
   function handleNav(tabId) {
     onTabChange(tabId)
@@ -169,17 +320,33 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
         <img src={logo} alt="Logo" className="w-9 h-9 rounded-xl object-contain shrink-0" />
         {!collapsed && (
           <div className="overflow-hidden">
-            <h1 className="text-sm font-bold text-stone-800 dark:text-stone-100 leading-tight truncate">
+            <h1 className="text-sm font-bold tracking-tight text-stone-800 dark:text-stone-100 leading-tight truncate">
               ChickenCoopComfort
             </h1>
-            <p className="text-[10px] text-stone-400 dark:text-stone-500 truncate">Smart coop AI</p>
           </div>
         )}
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 py-3 px-2 space-y-1 overflow-y-auto">
-        {tabs.map(tab => {
+      <nav className="flex-1 py-3 px-2 overflow-y-auto">
+        {tabs.map((tab, idx) => {
+          if (tab.separator) {
+            if (tab.label && !collapsed) {
+              return (
+                <div key={`sep-${idx}`} className="pt-4 pb-1 px-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 select-none">
+                    {tab.label}
+                  </span>
+                </div>
+              )
+            }
+            return (
+              <div
+                key={`sep-${idx}`}
+                className="border-t border-stone-100 dark:border-stone-700/50 mx-1 my-2"
+              />
+            )
+          }
           const Icon = ICON_MAP[tab.id] || IconHome
           const isActive = activeTab === tab.id
           return (
@@ -187,7 +354,7 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
               key={tab.id}
               onClick={() => handleNav(tab.id)}
               title={collapsed ? tab.label : undefined}
-              className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-150 active:scale-[0.97] ${
+              className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium transition-all duration-150 active:scale-[0.97] mb-0.5 ${
                 collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5'
               } ${
                 isActive
@@ -235,6 +402,13 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
 
   return (
     <div className="h-screen flex bg-stone-50 dark:bg-stone-900 text-stone-800 dark:text-stone-100">
+      <CommandPalette
+        isOpen={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        tabs={tabs}
+        activeTab={activeTab}
+        onTabChange={onTabChange}
+      />
       {/* ── Desktop sidebar ─────────────────────────────────────── */}
       <aside
         className={`hidden md:flex flex-col shrink-0 bg-white dark:bg-stone-800 border-r border-stone-200 dark:border-stone-700/50 transition-all duration-200 ${
@@ -274,8 +448,9 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-hidden">
-          {children}
+        <main className="flex-1 flex flex-col overflow-hidden">
+          <div className={`h-[3px] w-full shrink-0 transition-colors duration-500 ${statusBarClass}`} />
+          <div className="flex-1 overflow-hidden">{children}</div>
         </main>
 
         {/* Footer */}
@@ -283,9 +458,11 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
           <p className="text-[11px] text-stone-400 dark:text-stone-500">
             ChickenCoopComfort &copy; {new Date().getFullYear()}
           </p>
-          <p className="text-[11px] text-stone-400 dark:text-stone-500">
-            Powered by AI &bull; Real-time monitoring
-          </p>
+          {footerStatus && (
+            <p className="text-[11px] text-stone-400 dark:text-stone-500 font-mono tabular-nums">
+              {footerStatus}
+            </p>
+          )}
         </footer>
       </div>
     </div>

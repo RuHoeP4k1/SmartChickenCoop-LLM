@@ -38,7 +38,7 @@ function ReviewCard({ event, onSaved }) {
   }
 
   return (
-    <div className={`rounded-2xl border bg-white dark:bg-stone-800 overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
+    <div className={`rounded-xl border bg-white dark:bg-stone-800 overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
       {/* Header */}
       <div
         className="px-4 py-3 flex items-start justify-between gap-3 cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-700/50 transition-colors"
@@ -51,12 +51,12 @@ function ReviewCard({ event, onSaved }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-1">
               {/* Review status badge */}
-              {isGood === true && <span className="text-xs font-semibold px-2 py-0.5 rounded-md border bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700">Good</span>}
-              {isGood === false && <span className="text-xs font-semibold px-2 py-0.5 rounded-md border bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700">Bad</span>}
-              {isGood == null && <span className="text-xs font-semibold px-2 py-0.5 rounded-md border bg-stone-100 text-stone-500 border-stone-300 dark:bg-stone-700 dark:text-stone-400 dark:border-stone-600">Unrated</span>}
+              {isGood === true && <span className="text-xs font-semibold px-2 py-0.5 rounded-lg border bg-green-100 text-green-700 border-green-300 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700">Good</span>}
+              {isGood === false && <span className="text-xs font-semibold px-2 py-0.5 rounded-lg border bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700">Bad</span>}
+              {isGood == null && <span className="text-xs font-semibold px-2 py-0.5 rounded-lg border bg-stone-100 text-stone-500 border-stone-300 dark:bg-stone-700 dark:text-stone-400 dark:border-stone-600">Unrated</span>}
               {/* Routing badge */}
-              {hasSensors && <span className="text-xs px-2 py-0.5 rounded-md border bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700">Sensors</span>}
-              {event.prompt_template && <span className="text-xs px-2 py-0.5 rounded-md border bg-stone-50 text-stone-500 border-stone-200 dark:bg-stone-700 dark:text-stone-400 dark:border-stone-600">{event.prompt_template}</span>}
+              {hasSensors && <span className="text-xs px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700">Sensors</span>}
+              {event.prompt_template && <span className="text-xs px-2 py-0.5 rounded-lg border bg-stone-50 text-stone-500 border-stone-200 dark:bg-stone-700 dark:text-stone-400 dark:border-stone-600">{event.prompt_template}</span>}
               {event.response_time_ms != null && <span className="text-xs text-stone-400 dark:text-stone-500">{event.response_time_ms}ms</span>}
             </div>
             <p className="text-sm text-stone-700 dark:text-stone-200 truncate">{event.user_query}</p>
@@ -300,7 +300,7 @@ export default function ResponseReview() {
         {loading && (
           <div className="space-y-3">
             {[1,2,3].map(i => (
-              <div key={i} className="rounded-2xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
+              <div key={i} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
                 <div className="flex items-center gap-3">
                   <div className="skeleton w-6 h-6 rounded-full shrink-0" />
                   <div className="flex-1 space-y-2">
