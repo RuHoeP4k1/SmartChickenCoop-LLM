@@ -615,7 +615,7 @@ def answer_query(
 
             routing_decision = "include" if include else "exclude"
             if include:
-                sensor_context = get_sensor_context(sensor_data)
+                sensor_context = get_sensor_context(sensor_data, query=query)
 
     # Step 2: Retrieve relevant documents
     if use_hybrid:

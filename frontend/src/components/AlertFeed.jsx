@@ -5,6 +5,7 @@ const TYPE_META = {
   sensor_alert:      { label: 'Sensor Alert', style: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700' },
   conditions_normal: { label: 'All Clear',    style: 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700' },
   llm_response:      { label: 'Q&A',          style: 'bg-stone-100 text-stone-600 border-stone-300 dark:bg-stone-700 dark:text-stone-300 dark:border-stone-600' },
+  automation_action: { label: 'Automation',   style: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700' },
 }
 
 const SEV_ICON = { critical: '⚠', warning: '⚡', info: 'ℹ' }
@@ -96,6 +97,7 @@ function EventCard({ event }) {
 const FILTERS = [
   { value: null,               label: 'All' },
   { value: 'sensor_alert',     label: 'Alerts' },
+  { value: 'automation_action',label: 'Automation' },
   { value: 'conditions_normal',label: 'All Clear' },
   { value: 'llm_response',     label: 'Q&A' },
 ]

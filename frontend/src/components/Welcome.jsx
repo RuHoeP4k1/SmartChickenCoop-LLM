@@ -215,11 +215,12 @@ export default function Welcome({ onNavigate }) {
           <p className="text-stone-700 dark:text-stone-200 text-sm font-medium leading-snug mb-3">
             {coopStatus.message}
           </p>
-          {sensors && (
+          {sensors && (sensors.temperature_c != null || sensors.humidity_pct != null) && (
             <p className="text-stone-500 dark:text-stone-400 text-xs tabular-nums">
-              {sensors.temperature_c != null ? `${sensors.temperature_c}\u00b0C` : '\u2014'}
-              {' \u00b7 '}
-              {sensors.humidity_pct != null ? `${sensors.humidity_pct}%` : '\u2014'} humidity
+              {[
+                sensors.temperature_c != null ? `${sensors.temperature_c}°C` : null,
+                sensors.humidity_pct != null ? `${sensors.humidity_pct}% humidity` : null,
+              ].filter(Boolean).join(' · ')}
             </p>
           )}
           <p className="text-stone-400 dark:text-stone-500 text-xs mt-auto pt-3">
@@ -309,7 +310,7 @@ export default function Welcome({ onNavigate }) {
               </p>
               <div className="flex items-baseline gap-3">
                 <span className="text-3xl font-bold tabular-nums text-stone-800 dark:text-stone-100">
-                  {weatherTemp}\u00b0C
+                  {weatherTemp}°C
                 </span>
                 {weatherDesc && (
                   <span className="text-sm text-stone-500 dark:text-stone-400">

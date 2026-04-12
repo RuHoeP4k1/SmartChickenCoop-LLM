@@ -137,6 +137,16 @@ export async function exportReviews() {
   return res.json()
 }
 
+export async function evaluateAutomation(ventEnabled, doorEnabled) {
+  const res = await fetch('/automation/evaluate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ vent_enabled: ventEnabled, door_enabled: doorEnabled }),
+  })
+  if (!res.ok) throw new Error(`Automation evaluate failed (${res.status})`)
+  return res.json()
+}
+
 export async function getRiskLatest() {
   const res = await fetch('/risk/latest')
   if (res.status === 404) return null

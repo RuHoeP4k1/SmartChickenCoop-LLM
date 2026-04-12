@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { getSensors, getRiskLatest } from '../api'
+import { useState, useEffect, useRef } from 'react'
+import { getSensors, getRiskLatest, evaluateAutomation } from '../api'
 
 function Toggle({ enabled, onChange }) {
   return (
@@ -50,10 +50,14 @@ export default function AutomationPanel() {
   const [sensorData, setSensorData] = useState(undefined)
   const [riskData, setRiskData] = useState(null)
   const [error, setError] = useState(null)
+  const [evaluating, setEvaluating] = useState(false)
+  const [lastActions, setLastActions] = useState([])
   const [toggles, setToggles] = useState(() => {
     try { return JSON.parse(localStorage.getItem('automation_toggles') || '{}') }
     catch { return {} }
   })
+  const togglesRef = useRef(toggles)
+  togglesRef.current = toggles
 
   useEffect(() => {
     async function load() {
@@ -69,10 +73,30 @@ export default function AutomationPanel() {
     return () => clearInterval(id)
   }, [])
 
+  async function runEvaluate(ventEnabled, doorEnabled) {
+    if (!ventEnabled && !doorEnabled) {
+      setLastActions([])
+      return
+    }
+    setEvaluating(true)
+    try {
+      const result = await evaluateAutomation(ventEnabled, doorEnabled)
+      setLastActions(result.actions ?? [])
+    } catch {
+      // silent — don't surface evaluate errors over main UI
+    } finally {
+      setEvaluating(false)
+    }
+  }
+
   function setToggle(key, value) {
     const updated = { ...toggles, [key]: value }
     setToggles(updated)
     localStorage.setItem('automation_toggles', JSON.stringify(updated))
+    runEvaluate(
+      key === 'vent_auto' ? value : updated.vent_auto ?? false,
+      key === 'door_auto' ? value : updated.door_auto ?? false,
+    )
   }
 
   const r = sensorData?.reading
@@ -198,8 +222,10 @@ export default function AutomationPanel() {
 
               {/* Related sensors */}
               <div className="mt-4 flex flex-wrap gap-2">
-                <SensorBadge label="Mold risk" value={r.mold_risk_status} status={r.mold_risk_status} />
-                <SensorBadge label="Heat stress" value={r.heat_stress_index} status={r.heat_stress_index} />
+                <SensorBadge label="Heat risk" value={r.heat_risk_level?.split(' - ')[0] ?? '—'} status={r.heat_risk_level?.toLowerCase().startsWith('high') ? 'critical' : r.heat_risk_level?.toLowerCase().startsWith('med') ? 'warning' : 'normal'} />
+                <SensorBadge label="Mold risk" value={r.mold_risk_level ?? '—'} status={['high','severe'].includes(r.mold_risk_level) ? 'critical' : r.mold_risk_level === 'medium' ? 'warning' : 'normal'} />
+                <SensorBadge label="CO₂" value={r.co2_level ?? '—'} status={r.co2_level ?? 'normal'} />
+                <SensorBadge label="NH₃" value={r.nh3_level ?? '—'} status={r.nh3_level ?? 'normal'} />
               </div>
 
               {/* Fan rate from risk snapshot */}
@@ -224,11 +250,47 @@ export default function AutomationPanel() {
           </div>
         )}
 
-        {/* Info note */}
-        {r && (
-          <div className="mt-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-xl px-4 py-3 text-xs text-amber-700 dark:text-amber-400">
-            <strong>Note:</strong> Automation toggles are visual only for now. The hardware integration is being developed separately.
-            Sensor status updates live every 15 seconds.
+        {/* Last automation evaluation */}
+        {lastActions.length > 0 && (
+          <div className="mt-6 space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500">
+              Last evaluation {evaluating && <span className="text-sky-400">· updating…</span>}
+            </p>
+            {lastActions.map((a, i) => {
+              const stateColors = {
+                boosted:    'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20',
+                nominal:    'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20',
+                closed:     'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20',
+                open:       'border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-900/20',
+                monitoring: 'border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-700/30',
+              }
+              const stateLabel = {
+                boosted: 'Boosted', nominal: 'Nominal',
+                closed: 'Closed', open: 'Open', monitoring: 'Monitoring',
+              }
+              return (
+                <div key={i} className={`rounded-xl border px-4 py-3 ${stateColors[a.state] ?? stateColors.monitoring}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
+                      {a.system}
+                    </span>
+                    <span className="text-xs font-bold text-stone-700 dark:text-stone-200">
+                      {stateLabel[a.state] ?? a.state}
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">{a.reason}</p>
+                </div>
+              )
+            })}
+            <p className="text-xs text-stone-400 dark:text-stone-500">
+              Decisions logged to Event Log · hardware integration pending
+            </p>
+          </div>
+        )}
+
+        {!lastActions.length && r && (
+          <div className="mt-6 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 rounded-xl px-4 py-3 text-xs text-stone-500 dark:text-stone-400">
+            Enable a system above to evaluate current conditions and log a decision.
           </div>
         )}
       </div>

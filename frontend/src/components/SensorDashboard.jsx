@@ -444,6 +444,20 @@ export default function SensorDashboard() {
                 metricKey="h2s_ppm"
               />
               <MetricCard
+                label="CO₂"
+                value={r.co2_ppm != null ? Math.round(r.co2_ppm) : null}
+                unit="ppm"
+                status={r.co2_level}
+                metricKey="co2_ppm"
+              />
+              <MetricCard
+                label="NH₃"
+                value={r.nh3_ppm != null ? r.nh3_ppm.toFixed(1) : null}
+                unit="ppm"
+                status={r.nh3_level}
+                metricKey="nh3_ppm"
+              />
+              <MetricCard
                 label="Mold Risk Score"
                 value={r.mold_risk_score != null ? r.mold_risk_score.toFixed(1) : null}
                 unit="score"

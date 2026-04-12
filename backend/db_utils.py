@@ -91,6 +91,8 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 s.feeder_status, s.waterer_status,
                 s.feeder_pct, s.waterer_pct,
                 s.h2s_ppm, s.h2s_level,
+                s.co2_ppm, s.co2_level,
+                s.nh3_ppm, s.nh3_level,
                 s.door_open, s.ventilation_on,
                 s.error,
                 cv.number_of_chickens,
@@ -101,7 +103,8 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 r.thi_current,
                 r.mold_risk_score,
                 r.mold_risk_level,
-                r.contributing_factors AS risk_factors
+                r.contributing_factors AS risk_factors,
+                c.crowding_verdict
             FROM sensor_readings_colson s
             LEFT JOIN LATERAL (
                 SELECT number_of_chickens, egg_count
@@ -116,6 +119,12 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 ORDER BY created_at DESC
                 LIMIT 1
             ) r ON true
+            LEFT JOIN LATERAL (
+                SELECT crowding_verdict
+                FROM crowding
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) c ON true
             ORDER BY s.timestamp DESC
             LIMIT 1
             """
@@ -149,6 +158,8 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 h2s_ppm, h2s_level,
+                co2_ppm, co2_level,
+                nh3_ppm, nh3_level,
                 door_open, ventilation_on,
                 error
             FROM sensor_readings_colson
@@ -370,6 +381,13 @@ ALTER TABLE event_log ADD COLUMN IF NOT EXISTS routing_mode TEXT;
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS routing_decision TEXT;
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS prompt_template TEXT;
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
+"""
+
+MIGRATE_SENSOR_READINGS_SQL = """
+ALTER TABLE sensor_readings_colson ADD COLUMN IF NOT EXISTS co2_ppm DOUBLE PRECISION;
+ALTER TABLE sensor_readings_colson ADD COLUMN IF NOT EXISTS co2_level TEXT DEFAULT 'normal';
+ALTER TABLE sensor_readings_colson ADD COLUMN IF NOT EXISTS nh3_ppm DOUBLE PRECISION;
+ALTER TABLE sensor_readings_colson ADD COLUMN IF NOT EXISTS nh3_level TEXT DEFAULT 'normal';
 """
 
 
@@ -929,6 +947,10 @@ CREATE TABLE IF NOT EXISTS sensor_readings_colson (
     waterer_pct FLOAT,
     h2s_ppm FLOAT,
     h2s_level TEXT DEFAULT 'normal',
+    co2_ppm FLOAT,
+    co2_level TEXT DEFAULT 'normal',
+    nh3_ppm FLOAT,
+    nh3_level TEXT DEFAULT 'normal',
     mold_risk_score FLOAT,
     mold_risk_status TEXT DEFAULT 'normal',
     door_open BOOLEAN DEFAULT FALSE,
@@ -937,6 +959,16 @@ CREATE TABLE IF NOT EXISTS sensor_readings_colson (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_colson_timestamp ON sensor_readings_colson(timestamp DESC);
+"""
+
+CREATE_CROWDING_SQL = """
+CREATE TABLE IF NOT EXISTS crowding (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    crowding_verdict TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_crowding_created_at ON crowding(created_at DESC);
 """
 
 CREATE_CV_COUNTS_SQL = """
@@ -1063,6 +1095,8 @@ def setup_database():
     try:
         cursor = conn.cursor()
         cursor.execute(CREATE_SENSOR_READINGS_COLSON_SQL)
+        cursor.execute(MIGRATE_SENSOR_READINGS_SQL)
+        cursor.execute(CREATE_CROWDING_SQL)
         cursor.execute(CREATE_CV_COUNTS_SQL)
         cursor.execute(CREATE_RISK_SNAPSHOTS_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)

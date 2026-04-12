@@ -270,16 +270,94 @@ def should_include_sensors(user_query: str, sensor_data: Dict) -> bool:
 
 
 # =============================================================================
+# Query → sensor group relevance
+# =============================================================================
+
+_ALL_GROUPS = {'climate', 'air_quality', 'resources', 'flock', 'infrastructure'}
+
+# Broad queries that warrant all sensor context
+_BROAD_QUERY_SIGNALS = [
+    "how's the coop", "how is the coop", "how are things",
+    "check on", "check the coop", "status of", "anything wrong",
+    "any problems", "any issues", "what's happening", "what are the readings",
+    "is everything okay", "is everything alright",
+    "how are my", "are they okay", "are they safe",
+    "should i be worried", "worried about",
+]
+
+# Topic keywords → which sensor groups are relevant to the query.
+# Substring matching; a query can match multiple groups.
+_QUERY_SENSOR_RELEVANCE = {
+    'climate': [
+        'hot', 'cold', 'warm', 'cool', 'temperature', 'heat',
+        'humid', 'dry', 'weather', 'freez', 'frost',
+        # Heat-stress symptoms
+        'panting', 'lethargic', 'lethargy', 'wings spread', 'huddl', 'shiver',
+        # General health → include environmental context
+        'sick', 'ill', 'health', 'disease',
+    ],
+    'air_quality': [
+        'smell', 'stink', 'odor', 'odour', 'ammonia', 'air',
+        'stuffy', 'breath', 'cough', 'sneez', 'gasp', 'wheez', 'rattling',
+        'mold', 'mould', 'damp', 'condensat', 'foggy', 'muggy',
+        'gas', 'co2', 'carbon dioxide', 'nh3', 'h2s', 'hydrogen sulfide',
+        'ventilat', 'fan',
+        # General health → include air quality
+        'sick', 'ill', 'health', 'disease',
+    ],
+    'resources': [
+        'food', 'feed', 'water', 'drink', 'hungry', 'thirsty',
+        'eat', 'refill', 'empty', 'feeder', 'waterer',
+        'topped up', 'filled up', 'run out', 'running low',
+    ],
+    'flock': [
+        'chicken', 'hen', 'bird', 'flock', 'rooster',
+        'crowd', 'space', 'peck', 'fight', 'aggressiv', 'bully',
+        'egg', 'lay', 'laid', 'inside', 'count', 'how many',
+        'broody', 'molt', 'moult', 'feather',
+        'sick', 'ill', 'health', 'disease', 'infect',
+        'limp', 'walk', 'diarrhea', 'dropping', 'worm', 'mite', 'lice', 'parasit',
+        'pale comb', 'blue comb', 'swollen', 'discharge', 'dead', 'dying',
+    ],
+    'infrastructure': [
+        'door', 'close', 'open', 'lock', 'shut',
+        'ventilat', 'fan',
+        'left the', 'did i',
+    ],
+}
+
+
+def _relevant_groups(query: Optional[str]) -> set:
+    """Determine which sensor groups are relevant to the user's query."""
+    if not query:
+        return _ALL_GROUPS
+
+    q = query.lower()
+
+    # Broad concern queries → all groups
+    if any(sig in q for sig in _BROAD_QUERY_SIGNALS):
+        return _ALL_GROUPS
+
+    groups = set()
+    for group, keywords in _QUERY_SENSOR_RELEVANCE.items():
+        if any(kw in q for kw in keywords):
+            groups.add(group)
+
+    # No specific match → all groups (safe fallback)
+    return groups or _ALL_GROUPS
+
+
+# =============================================================================
 # Sensor context formatting
 # =============================================================================
 
-def get_sensor_context(sensor_data: Dict) -> str:
+def get_sensor_context(sensor_data: Dict, query: Optional[str] = None) -> str:
     """
     Build a compact sensor context string for the LLM prompt.
 
-    Only reports readings that are non-normal / non-full. Does NOT dump
-    all sensor values — chickens_inside, egg_count, door, ventilation are
-    only included when notable (door open = notable; ventilation always on = not).
+    When a query is provided, only includes sensor groups relevant to the
+    query topic (climate, air_quality, resources, flock, infrastructure).
+    When no query is given, includes all non-normal readings (full dump).
 
     Returns:
         Formatted string with current readings, or "All coop readings normal."
@@ -287,78 +365,109 @@ def get_sensor_context(sensor_data: Dict) -> str:
     if not sensor_data:
         return ""
 
+    groups = _relevant_groups(query)
     alerts = []
 
-    # Temperature
-    temp_status = sensor_data.get("temperature_status", "normal")
-    if temp_status != "normal":
-        temp_c = sensor_data.get("temperature_c")
-        if temp_c is not None:
-            alerts.append(f"Temperature: {temp_c:.1f}°C ({temp_status})")
+    # Temperature — climate
+    if 'climate' in groups:
+        temp_status = sensor_data.get("temperature_status", "normal")
+        if temp_status != "normal":
+            temp_c = sensor_data.get("temperature_c")
+            if temp_c is not None:
+                alerts.append(f"Temperature: {temp_c:.1f}°C ({temp_status})")
 
-    # Humidity
-    humidity_status = sensor_data.get("humidity_status", "normal")
-    if humidity_status != "normal":
-        humidity_pct = sensor_data.get("humidity_pct")
-        if humidity_pct is not None:
-            alerts.append(f"Humidity: {humidity_pct:.0f}% ({humidity_status})")
+    # Humidity — climate
+    if 'climate' in groups:
+        humidity_status = sensor_data.get("humidity_status", "normal")
+        if humidity_status != "normal":
+            humidity_pct = sensor_data.get("humidity_pct")
+            if humidity_pct is not None:
+                alerts.append(f"Humidity: {humidity_pct:.0f}% ({humidity_status})")
 
-    # Heat risk (from risk_snapshots) — concise level + THI if notable
-    heat_level = sensor_data.get("heat_risk_level")
-    if _heat_is_non_normal(heat_level):
-        # Strip "- Monitor" / "- Take action now" suffix for compactness
-        level_short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
-        thi = sensor_data.get("thi_current")
-        if thi is not None:
-            alerts.append(f"Heat risk: {level_short} (THI {float(thi):.1f})")
-        else:
-            alerts.append(f"Heat risk: {level_short}")
+    # Heat risk (from risk_snapshots) — climate
+    if 'climate' in groups:
+        heat_level = sensor_data.get("heat_risk_level") or ""
+        if _heat_is_non_normal(heat_level):
+            level_short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
+            thi = sensor_data.get("thi_current")
+            if thi is not None:
+                alerts.append(f"Heat risk: {level_short} (THI {float(thi):.1f})")
+            else:
+                alerts.append(f"Heat risk: {level_short}")
 
-    # Feeder — include percentage when available
-    feeder_status = sensor_data.get("feeder_status", "full")
-    if feeder_status in ["low", "empty"]:
-        pct = sensor_data.get("feeder_pct")
-        pct_str = f" ({pct:.0f}%)" if pct is not None else ""
-        alerts.append(f"Feeder: {feeder_status}{pct_str}")
+    # Feeder — resources
+    if 'resources' in groups:
+        feeder_status = sensor_data.get("feeder_status", "full")
+        if feeder_status in ["low", "empty"]:
+            pct = sensor_data.get("feeder_pct")
+            pct_str = f" ({pct:.0f}%)" if pct is not None else ""
+            alerts.append(f"Feeder: {feeder_status}{pct_str}")
 
-    # Waterer
-    waterer_status = sensor_data.get("waterer_status", "full")
-    if waterer_status in ["low", "empty"]:
-        pct = sensor_data.get("waterer_pct")
-        pct_str = f" ({pct:.0f}%)" if pct is not None else ""
-        alerts.append(f"Waterer: {waterer_status}{pct_str}")
+    # Waterer — resources
+    if 'resources' in groups:
+        waterer_status = sensor_data.get("waterer_status", "full")
+        if waterer_status in ["low", "empty"]:
+            pct = sensor_data.get("waterer_pct")
+            pct_str = f" ({pct:.0f}%)" if pct is not None else ""
+            alerts.append(f"Waterer: {waterer_status}{pct_str}")
 
-    # H2S gas
-    h2s_level = sensor_data.get("h2s_level", "normal")
-    if h2s_level != "normal":
-        h2s_ppm = sensor_data.get("h2s_ppm")
-        ppm_str = f" ({h2s_ppm:.0f} ppm)" if h2s_ppm is not None else ""
-        alerts.append(f"H2S gas: {h2s_level}{ppm_str}")
+    # H2S gas — air_quality
+    if 'air_quality' in groups:
+        h2s_level = sensor_data.get("h2s_level", "normal")
+        if h2s_level != "normal":
+            h2s_ppm = sensor_data.get("h2s_ppm")
+            ppm_str = f" ({h2s_ppm:.0f} ppm)" if h2s_ppm is not None else ""
+            alerts.append(f"H2S gas: {h2s_level}{ppm_str}")
 
-    # Mold risk (from risk_snapshots)
-    mold_level = sensor_data.get("mold_risk_level")
-    if _mold_is_non_normal(mold_level):
-        alerts.append(f"Mold risk: {mold_level}")
+    # CO2 — air_quality
+    if 'air_quality' in groups:
+        co2_level = sensor_data.get("co2_level", "normal")
+        if co2_level != "normal":
+            co2_ppm = sensor_data.get("co2_ppm")
+            ppm_str = f" ({co2_ppm:.0f} ppm)" if co2_ppm is not None else ""
+            alerts.append(f"CO2: {co2_level}{ppm_str}")
 
-    # Door — only notable when open
-    if sensor_data.get("door_open"):
-        alerts.append("Coop door: open")
+    # NH3 (ammonia) — air_quality
+    if 'air_quality' in groups:
+        nh3_level = sensor_data.get("nh3_level", "normal")
+        if nh3_level != "normal":
+            nh3_ppm = sensor_data.get("nh3_ppm")
+            ppm_str = f" ({nh3_ppm:.1f} ppm)" if nh3_ppm is not None else ""
+            alerts.append(f"NH3 (ammonia): {nh3_level}{ppm_str}")
 
-    # Chickens inside — always include (useful operational context)
-    # number_of_chickens is the canonical name from cv_counts_colson;
-    # chickens_inside is kept as an alias for backwards compat.
-    chickens = sensor_data.get("number_of_chickens") or sensor_data.get("chickens_inside")
-    if chickens is not None:
-        alerts.append(f"Chickens inside coop: {chickens}")
+    # Mold risk (from risk_snapshots) — air_quality
+    if 'air_quality' in groups:
+        mold_level = sensor_data.get("mold_risk_level")
+        if _mold_is_non_normal(mold_level):
+            alerts.append(f"Mold risk: {mold_level}")
 
-    # Egg count — include when eggs have been laid
-    eggs = sensor_data.get("egg_count")
-    if eggs is not None and eggs > 0:
-        alerts.append(f"Eggs detected: {eggs}")
+    # Crowding verdict (from crowding table) — flock
+    if 'flock' in groups:
+        crowding_verdict = sensor_data.get("crowding_verdict")
+        if crowding_verdict and not crowding_verdict.upper().startswith("NOT OVERCROWDED"):
+            alerts.append(f"Crowding: {crowding_verdict}")
 
-    # Ventilation — include when on (relevant for temp/H2S alerts)
-    if sensor_data.get("ventilation_on"):
-        alerts.append("Ventilation: on")
+    # Door — infrastructure (only notable when open)
+    if 'infrastructure' in groups:
+        if sensor_data.get("door_open"):
+            alerts.append("Coop door: open")
+
+    # Chickens inside — flock
+    if 'flock' in groups:
+        chickens = sensor_data.get("number_of_chickens") or sensor_data.get("chickens_inside")
+        if chickens is not None:
+            alerts.append(f"Chickens inside coop: {chickens}")
+
+    # Egg count — flock
+    if 'flock' in groups:
+        eggs = sensor_data.get("egg_count")
+        if eggs is not None and eggs > 0:
+            alerts.append(f"Eggs detected: {eggs}")
+
+    # Ventilation — infrastructure
+    if 'infrastructure' in groups:
+        if sensor_data.get("ventilation_on"):
+            alerts.append("Ventilation: on")
 
     ts = sensor_data.get("timestamp")
     if is_reading_stale(sensor_data) and ts is not None:
@@ -366,8 +475,16 @@ def get_sensor_context(sensor_data: Dict) -> str:
     else:
         header = "Current coop readings:"
 
+    # contributing_factors from risk_snapshots — include when climate or air_quality relevant
+    risk_factors = sensor_data.get("risk_factors") or ""
+    risk_context_line = ""
+    if risk_factors and ('climate' in groups or 'air_quality' in groups):
+        if (_heat_is_non_normal(sensor_data.get("heat_risk_level")) or
+                _mold_is_non_normal(sensor_data.get("mold_risk_level"))):
+            risk_context_line = f"\nRisk context: {risk_factors}"
+
     if alerts:
-        return header + "\n" + "\n".join(f"- {a}" for a in alerts)
+        return header + "\n" + "\n".join(f"- {a}" for a in alerts) + risk_context_line
     return f"{header}\n- All readings normal."
 
 
@@ -413,6 +530,20 @@ def get_critical_alerts(sensor_data: Dict) -> list:
     if _mold_is_critical(sensor_data.get("mold_risk_level")):
         critical.append(f"Critical mold risk ({sensor_data.get('mold_risk_level')})")
 
+    if sensor_data.get("co2_level") == "critical":
+        ppm = sensor_data.get("co2_ppm")
+        ppm_str = f": {ppm:.0f} ppm" if ppm is not None else ""
+        critical.append(f"Dangerous CO2 level{ppm_str}")
+
+    if sensor_data.get("nh3_level") == "critical":
+        ppm = sensor_data.get("nh3_ppm")
+        ppm_str = f": {ppm:.1f} ppm" if ppm is not None else ""
+        critical.append(f"Dangerous NH3 (ammonia) level{ppm_str}")
+
+    crowding_verdict = sensor_data.get("crowding_verdict") or ""
+    if crowding_verdict.upper().startswith("OVERCROWDED"):
+        critical.append(f"Coop overcrowded: {crowding_verdict}")
+
     return critical
 
 
@@ -438,7 +569,13 @@ def format_sensor_summary(sensor_data: Dict) -> str:
     h2s_ppm = sd.get("h2s_ppm")
     h2s = sd.get("h2s_level", "?") + (f"({h2s_ppm}ppm)" if h2s_ppm else "")
     parts.append(f"h2s={h2s}")
+    co2_ppm = sd.get("co2_ppm")
+    parts.append(f"co2={sd.get('co2_level','?')}" + (f"({co2_ppm:.0f}ppm)" if co2_ppm else ""))
+    nh3_ppm = sd.get("nh3_ppm")
+    parts.append(f"nh3={sd.get('nh3_level','?')}" + (f"({nh3_ppm:.1f}ppm)" if nh3_ppm else ""))
     parts.append(f"mold_risk={sd.get('mold_risk_level','?')}")
+    crowding = sd.get("crowding_verdict") or "unknown"
+    parts.append(f"crowding={crowding.split(' - ')[0].split(' =')[0]}")
     parts.append(f"door={'open' if sd.get('door_open') else 'closed'}")
     parts.append(f"chickens={sd.get('number_of_chickens','N/A')}")
     parts.append(f"eggs={sd.get('egg_count', 0)}")
@@ -590,3 +727,42 @@ if __name__ == "__main__":
         if result:
             print(get_sensor_context(data))
         print()
+
+    # --- Selective context tests ---
+    print("=" * 60)
+    print("SELECTIVE CONTEXT TESTS")
+    print("=" * 60)
+
+    multi_alert = {
+        **normal,
+        "temperature_c": 35.2, "temperature_status": "critical",
+        "humidity_pct": 85, "humidity_status": "warning",
+        "heat_risk_level": "HIGH - Take action now", "thi_current": 31.2,
+        "co2_ppm": 1800, "co2_level": "warning",
+        "nh3_ppm": 18.5, "nh3_level": "warning",
+        "feeder_status": "empty", "feeder_pct": 2,
+        "crowding_verdict": "OVERCROWDED = 15 chickens in 10m²",
+        "door_open": True,
+        "number_of_chickens": 15,
+        "egg_count": 4,
+        "ventilation_on": True,
+    }
+
+    selective_tests = [
+        ("how many eggs today?",         {'flock'}),
+        ("is the door closed?",          {'infrastructure'}),
+        ("it smells like ammonia",        {'air_quality'}),
+        ("is it too hot in the coop?",    {'climate'}),
+        ("did they run out of water?",    {'resources'}),
+        ("how's the coop?",              _ALL_GROUPS),   # broad → all
+        (None,                            _ALL_GROUPS),   # no query → all
+    ]
+
+    for query, expected_groups in selective_tests:
+        groups = _relevant_groups(query)
+        ctx = get_sensor_context(multi_alert, query=query)
+        match = groups == expected_groups
+        status = "OK" if match else "FAIL"
+        print(f"\n[{status}] query={query!r}")
+        print(f"  groups: {sorted(groups)}  (expected {sorted(expected_groups)})")
+        print(f"  context:\n{ctx}")

@@ -39,7 +39,10 @@ from backend.db_utils import (
     ALLOWED_AUTOMATION_TASKS,
     get_latest_risk_snapshot,
 )
-from backend.sensor_filter import get_sensor_context
+from backend.sensor_filter import (
+    get_sensor_context, get_critical_alerts,
+    heat_is_non_normal, mold_is_non_normal,
+)
 from backend.scheduler import start_scheduler, stop_scheduler
 from backend.egg_reconciliation import reconcile_day
 from backend.consumption import consumption_for_date
@@ -462,6 +465,11 @@ class ChoreLogRequest(BaseModel):
     notes: str = Field(default="", max_length=500)
 
 
+class AutomationEvaluateRequest(BaseModel):
+    vent_enabled: bool = False
+    door_enabled: bool = False
+
+
 class AutomationWindowRequest(BaseModel):
     task: str
     start_date: date
@@ -701,6 +709,93 @@ def remove_automation_window(win_id: int):
     if removed == 0:
         raise HTTPException(status_code=404, detail="automation window not found")
     return {"status": "ok"}
+
+
+@app.post("/automation/evaluate")
+def evaluate_automation(body: AutomationEvaluateRequest):
+    """
+    Evaluate current conditions and determine what automation would do.
+    Logs a decision to event_log and returns the action + reason.
+    For show: does not control hardware, but accurately reflects what the
+    ventilation pipeline would decide based on live sensor data.
+    """
+    sensor = get_latest_sensor_reading()
+    if not sensor:
+        raise HTTPException(status_code=404, detail="No sensor data available")
+
+    actions = []
+
+    if body.vent_enabled:
+        heat_level = sensor.get("heat_risk_level") or ""
+        mold_level = sensor.get("mold_risk_level") or ""
+        co2_level = sensor.get("co2_level") or "normal"
+        nh3_level = sensor.get("nh3_level") or "normal"
+        h2s_level = sensor.get("h2s_level") or "normal"
+
+        triggers = []
+        if heat_is_non_normal(heat_level):
+            short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
+            triggers.append(f"heat stress {short}")
+        if mold_is_non_normal(mold_level):
+            triggers.append(f"mold risk {mold_level}")
+        if co2_level in ("warning", "critical"):
+            ppm = sensor.get("co2_ppm")
+            triggers.append(f"CO2 {co2_level}" + (f" ({ppm:.0f} ppm)" if ppm else ""))
+        if nh3_level in ("warning", "critical"):
+            ppm = sensor.get("nh3_ppm")
+            triggers.append(f"NH3 {nh3_level}" + (f" ({ppm:.1f} ppm)" if ppm else ""))
+        if h2s_level in ("warning", "critical"):
+            ppm = sensor.get("h2s_ppm")
+            triggers.append(f"H2S {h2s_level}" + (f" ({ppm:.1f} ppm)" if ppm else ""))
+
+        if triggers:
+            reason = "Ventilation boosted — " + ", ".join(triggers)
+            risk_factors = sensor.get("risk_factors")
+            if risk_factors:
+                reason += f" | {risk_factors}"
+            severity = "critical" if any(
+                sensor.get(k) == "critical"
+                for k in ("co2_level", "nh3_level", "h2s_level", "temperature_status", "humidity_status")
+            ) else "warning"
+            actions.append({"system": "ventilation", "state": "boosted", "reason": reason})
+            insert_event(
+                event_type="automation_action",
+                severity=severity,
+                sensor_snapshot=sensor,
+                sensor_context_filtered=reason,
+            )
+        else:
+            reason = "Ventilation nominal — all air quality and climate readings within acceptable range"
+            actions.append({"system": "ventilation", "state": "nominal", "reason": reason})
+
+    if body.door_enabled:
+        chickens = sensor.get("number_of_chickens") or sensor.get("chickens_inside") or 0
+        door_open = sensor.get("door_open", False)
+        critical = get_critical_alerts(sensor)
+
+        if critical:
+            reason = "Door kept closed — critical conditions detected: " + "; ".join(critical)
+            state = "closed"
+        elif chickens == 0:
+            reason = "Door can open — no chickens detected outside"
+            state = "open"
+        else:
+            reason = f"Monitoring door — {chickens} chicken(s) still inside"
+            state = "monitoring"
+
+        actions.append({"system": "door", "state": state, "reason": reason})
+        if critical:
+            insert_event(
+                event_type="automation_action",
+                severity="warning",
+                sensor_snapshot=sensor,
+                sensor_context_filtered=reason,
+            )
+
+    return {
+        "actions": actions,
+        "evaluated_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
 
 
 # Serve uploaded heatmap images as static files
