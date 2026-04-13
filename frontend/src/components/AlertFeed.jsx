@@ -1,91 +1,188 @@
 import { useState, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { getEvents } from '../api'
 
-const TYPE_META = {
-  sensor_alert:      { label: 'Sensor Alert', style: 'bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-700' },
-  conditions_normal: { label: 'All Clear',    style: 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-700' },
-  llm_response:      { label: 'Q&A',          style: 'bg-stone-100 text-stone-600 border-stone-300 dark:bg-stone-700 dark:text-stone-300 dark:border-stone-600' },
-  automation_action: { label: 'Automation',   style: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700' },
+// ---- card config: left-border color + badge + icon per event type/severity ----
+const CARD_CONFIG = {
+  sensor_alert_critical: {
+    border: 'border-l-red-500',
+    badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
+    title: 'text-red-700 dark:text-red-400',
+    icon: '🚨',
+    label: 'Critical Alert',
+    badgeText: 'critical',
+  },
+  sensor_alert_warning: {
+    border: 'border-l-amber-500',
+    badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400',
+    title: 'text-amber-700 dark:text-amber-400',
+    icon: '⚠️',
+    label: 'Environment Alert',
+    badgeText: 'warning',
+  },
+  sensor_alert_info: {
+    border: 'border-l-amber-300',
+    badge: 'bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
+    title: 'text-amber-600 dark:text-amber-400',
+    icon: '📊',
+    label: 'Sensor Alert',
+    badgeText: 'info',
+  },
+  conditions_normal: {
+    border: 'border-l-green-500',
+    badge: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+    title: 'text-green-700 dark:text-green-400',
+    icon: '✅',
+    label: 'All Clear',
+    badgeText: 'normal',
+  },
+  automation_action: {
+    border: 'border-l-violet-500',
+    badge: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400',
+    title: 'text-violet-700 dark:text-violet-400',
+    icon: '⚙️',
+    label: 'Automation',
+    badgeText: 'automated',
+  },
+  llm_response: {
+    border: 'border-l-blue-500',
+    badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400',
+    title: 'text-blue-700 dark:text-blue-400',
+    icon: '💬',
+    label: 'AI Response',
+    badgeText: 'Q&A',
+  },
 }
 
-const SEV_ICON = { critical: '⚠', warning: '⚡', info: 'ℹ' }
-const SEV_COLOR = { critical: 'text-red-500 dark:text-red-400', warning: 'text-amber-600 dark:text-amber-400', info: 'text-stone-400 dark:text-stone-500' }
-const CARD_BORDER = { critical: 'border-red-300 dark:border-red-700', warning: 'border-amber-300 dark:border-amber-700', info: 'border-stone-200 dark:border-stone-700' }
+function getConfig(event) {
+  if (event.event_type === 'sensor_alert') {
+    return CARD_CONFIG[`sensor_alert_${event.severity}`] ?? CARD_CONFIG.sensor_alert_info
+  }
+  return CARD_CONFIG[event.event_type] ?? CARD_CONFIG.llm_response
+}
 
+// ---- sensor pill ----
+const DOT = { green: 'bg-green-500', orange: 'bg-amber-500', red: 'bg-red-500', gray: 'bg-stone-400', blue: 'bg-blue-400' }
+function Pill({ color = 'gray', children }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-stone-50 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border border-stone-200 dark:border-stone-600">
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[color] ?? DOT.gray}`} />
+      {children}
+    </span>
+  )
+}
+
+// ---- markdown components (no prose plugin needed) ----
+const MD = {
+  p:      ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-relaxed">{children}</p>,
+  ul:     ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1 text-sm">{children}</ul>,
+  ol:     ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1 text-sm">{children}</ol>,
+  li:     ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-stone-800 dark:text-stone-100">{children}</strong>,
+  em:     ({ children }) => <em className="italic">{children}</em>,
+  code:   ({ children }) => <code className="bg-stone-100 dark:bg-stone-700 px-1 py-0.5 rounded text-xs font-mono">{children}</code>,
+  h1:     ({ children }) => <h1 className="text-base font-semibold mb-1 mt-2">{children}</h1>,
+  h2:     ({ children }) => <h2 className="text-sm font-semibold mb-1 mt-2">{children}</h2>,
+  h3:     ({ children }) => <h3 className="text-sm font-medium mb-1 mt-1">{children}</h3>,
+}
+
+// ---- event card ----
 function EventCard({ event }) {
   const [expanded, setExpanded] = useState(false)
-  const meta = TYPE_META[event.event_type] || TYPE_META.llm_response
-  const sources = event.sources ? (Array.isArray(event.sources) ? event.sources : JSON.parse(event.sources)) : []
+  const config = getConfig(event)
+  const sources = event.sources
+    ? (Array.isArray(event.sources) ? event.sources : JSON.parse(event.sources))
+    : []
   const hasBody = event.user_query || event.llm_response || event.sensor_context_filtered || sources.length > 0
 
+  // meta pills — routing info, response time, template
+  const pills = []
+  if (event.routing_mode)     pills.push({ color: 'gray',  label: `routing: ${event.routing_mode}` })
+  if (event.routing_decision) pills.push({ color: event.routing_decision?.toLowerCase() === 'include' ? 'green' : 'gray', label: event.routing_decision })
+  if (event.prompt_template)  pills.push({ color: 'blue',  label: event.prompt_template })
+  if (event.response_time_ms) pills.push({ color: 'gray',  label: `${event.response_time_ms} ms` })
+
+  const mainText = event.user_query || (!event.llm_response && event.sensor_context_filtered)
+
   return (
-    <div className={`rounded-xl border bg-white dark:bg-stone-800 overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${CARD_BORDER[event.severity] ?? CARD_BORDER.info}`}>
-      {/* Card header — always visible */}
+    <div className={`rounded-xl bg-white dark:bg-stone-800 overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 border border-stone-200 dark:border-stone-700 border-l-4 ${config.border}`}>
+
+      {/* ── header (always visible) ── */}
       <div
-        className={`px-4 py-3 flex items-start justify-between gap-3 ${hasBody ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-700/50 transition-colors' : ''}`}
+        className={`px-5 py-4 ${hasBody ? 'cursor-pointer hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors' : ''}`}
         onClick={() => hasBody && setExpanded(e => !e)}
       >
-        <div className="flex items-start gap-3 min-w-0">
-          <span className={`mt-0.5 shrink-0 text-base ${SEV_COLOR[event.severity] ?? SEV_COLOR.info}`}>
-            {SEV_ICON[event.severity] ?? 'ℹ'}
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 mb-1">
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg border ${meta.style}`}>
-                {meta.label}
-              </span>
-              <span className={`text-xs font-medium ${SEV_COLOR[event.severity] ?? SEV_COLOR.info}`}>
-                {event.severity}
-              </span>
-            </div>
-            {event.user_query && (
-              <p className="text-sm text-stone-700 dark:text-stone-200 truncate">{event.user_query}</p>
-            )}
-            {!event.user_query && event.sensor_context_filtered && (
-              <p className="text-sm text-stone-500 dark:text-stone-400 truncate">{event.sensor_context_filtered}</p>
-            )}
+        {/* type row */}
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-base leading-none">{config.icon}</span>
+            <span className={`text-xs font-semibold uppercase tracking-wider ${config.title}`}>{config.label}</span>
           </div>
+          <span className={`text-xs font-semibold px-3 py-0.5 rounded-full shrink-0 ${config.badge}`}>
+            {config.badgeText}
+          </span>
         </div>
 
-        <div className="shrink-0 text-right">
-          <p className="text-xs text-stone-400 dark:text-stone-500">{new Date(event.timestamp).toLocaleString()}</p>
+        {/* main text */}
+        {mainText && (
+          <p className="text-sm text-stone-700 dark:text-stone-200 leading-relaxed line-clamp-2">
+            {mainText}
+          </p>
+        )}
+
+        {/* pills */}
+        {pills.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {pills.map((p, i) => <Pill key={i} color={p.color}>{p.label}</Pill>)}
+          </div>
+        )}
+
+        {/* timestamp + expand indicator */}
+        <div className="flex items-center justify-between mt-3">
+          <span className="text-xs text-stone-400 dark:text-stone-500">
+            {new Date(event.timestamp).toLocaleString()}
+          </span>
           {hasBody && (
-            <p className="text-xs text-stone-300 dark:text-stone-600 mt-1">{expanded ? '▲ less' : '▼ more'}</p>
+            <span className="text-xs text-stone-400 dark:text-stone-500">{expanded ? '▲ less' : '▼ more'}</span>
           )}
         </div>
       </div>
 
-      {/* Expandable body */}
+      {/* ── expanded body ── */}
       {expanded && (
-        <div className="px-4 pb-4 pt-3 border-t border-stone-100 dark:border-stone-700 space-y-3">
+        <div className="px-5 pb-5 pt-4 border-t border-stone-100 dark:border-stone-700 space-y-4">
           {event.user_query && event.event_type !== 'llm_response' && (
             <div>
-              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Query</p>
+              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1.5">Query</p>
               <p className="text-sm text-stone-700 dark:text-stone-200 leading-relaxed">{event.user_query}</p>
             </div>
           )}
-          {event.sensor_context_filtered && (
+          {event.sensor_context_filtered && event.event_type !== 'llm_response' && (
             <div>
-              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Sensor Context</p>
-              <p className="text-sm text-stone-600 dark:text-stone-300 leading-relaxed whitespace-pre-wrap">{event.sensor_context_filtered}</p>
+              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1.5">Sensor Context</p>
+              <pre className="text-xs text-stone-600 dark:text-stone-300 whitespace-pre-wrap leading-relaxed bg-stone-50 dark:bg-stone-700/50 rounded-lg p-3 overflow-x-auto">
+                {event.sensor_context_filtered}
+              </pre>
             </div>
           )}
           {event.llm_response && (
             <div>
-              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">AI Response</p>
-              <p className="text-sm text-stone-700 dark:text-stone-200 leading-relaxed whitespace-pre-wrap">{event.llm_response}</p>
+              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1.5">AI Response</p>
+              <div className="text-stone-700 dark:text-stone-200">
+                <ReactMarkdown components={MD}>{event.llm_response}</ReactMarkdown>
+              </div>
             </div>
           )}
           {sources.length > 0 && (
             <div>
-              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Sources</p>
-              <ul className="space-y-0.5">
+              <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1.5">Sources</p>
+              <div className="flex flex-wrap gap-1.5">
                 {sources.map((src, i) => (
-                  <li key={i} className="text-xs text-stone-500 dark:text-stone-400 font-mono bg-stone-50 dark:bg-stone-700/50 border border-stone-200 dark:border-stone-700 rounded px-2 py-0.5 inline-block mr-1">
+                  <span key={i} className="text-xs text-stone-500 dark:text-stone-400 font-mono bg-stone-50 dark:bg-stone-700/50 border border-stone-200 dark:border-stone-700 rounded-lg px-2 py-0.5">
                     {src}
-                  </li>
+                  </span>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
         </div>
@@ -94,20 +191,21 @@ function EventCard({ event }) {
   )
 }
 
+// ---- filter bar ----
 const FILTERS = [
-  { value: null,               label: 'All' },
-  { value: 'sensor_alert',     label: 'Alerts' },
-  { value: 'automation_action',label: 'Automation' },
-  { value: 'conditions_normal',label: 'All Clear' },
-  { value: 'llm_response',     label: 'Q&A' },
+  { value: null,                label: 'All' },
+  { value: 'sensor_alert',      label: 'Alerts' },
+  { value: 'automation_action', label: 'Automation' },
+  { value: 'conditions_normal', label: 'All Clear' },
+  { value: 'llm_response',      label: 'Q&A' },
 ]
 
 export default function AlertFeed() {
-  const [events, setEvents] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [events, setEvents]       = useState([])
+  const [loading, setLoading]     = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState(null)
-  const [filter, setFilter] = useState(null)
+  const [error, setError]         = useState(null)
+  const [filter, setFilter]       = useState(null)
 
   async function load(showSpinner = false) {
     if (showSpinner) setRefreshing(true)
@@ -134,8 +232,8 @@ export default function AlertFeed() {
     <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
       <div className="max-w-3xl mx-auto">
 
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        {/* header */}
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div>
             <h2 className="text-base font-semibold text-stone-800 dark:text-stone-100">Event Log</h2>
             <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Sensor alerts and AI responses · refreshes every 10 s</p>
@@ -144,7 +242,7 @@ export default function AlertFeed() {
             <button
               onClick={() => load(true)}
               disabled={refreshing}
-              className="text-xs border border-stone-300 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 bg-white dark:bg-stone-800 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
+              className="text-xs border border-stone-300 dark:border-stone-700 text-stone-500 dark:text-stone-400 hover:text-stone-800 dark:hover:text-stone-100 hover:border-stone-400 bg-white dark:bg-stone-800 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
             >
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -172,7 +270,7 @@ export default function AlertFeed() {
 
         {loading && (
           <div className="space-y-3">
-            {[1,2,3].map(i => (
+            {[1, 2, 3].map(i => (
               <div key={i} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
                 <div className="flex items-center gap-3">
                   <div className="skeleton w-6 h-6 rounded-full shrink-0" />
