@@ -67,14 +67,10 @@ def release_db_connection(conn):
     _pool.putconn(conn)
 
 
-def get_latest_sensor_reading() -> Optional[Dict]:
+def get_latest_sensor_reading(owner_id: int = None) -> Optional[Dict]:
     """
-    Get the most recent sensor reading, merged with the latest CV counts
-    AND the latest risk snapshot (heat + mold).
-
-    The Pi pipeline writes risk_snapshots from a separate process; the
-    legacy heat_stress_index / mold_risk_* columns on sensor_readings_colson
-    are kept nullable for backwards compat but no longer authoritative.
+    Get the most recent sensor reading for the given owner, merged with the
+    latest CV counts AND the latest risk snapshot (heat + mold).
 
     Returns:
         Dictionary with sensor + cv + risk data, or None if no data
@@ -109,6 +105,7 @@ def get_latest_sensor_reading() -> Optional[Dict]:
             LEFT JOIN LATERAL (
                 SELECT number_of_chickens, egg_count
                 FROM cv_counts_colson
+                WHERE (owner_id = %s OR owner_id IS NULL)
                 ORDER BY timestamp DESC
                 LIMIT 1
             ) cv ON true
@@ -116,6 +113,7 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 SELECT heat_risk_score, heat_risk_level, thi_current,
                        mold_risk_score, mold_risk_level, contributing_factors
                 FROM risk_snapshots
+                WHERE (owner_id = %s OR owner_id IS NULL)
                 ORDER BY created_at DESC
                 LIMIT 1
             ) r ON true
@@ -125,9 +123,11 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 ORDER BY created_at DESC
                 LIMIT 1
             ) c ON true
+            WHERE s.owner_id = %s
             ORDER BY s.timestamp DESC
             LIMIT 1
-            """
+            """,
+            (owner_id, owner_id, owner_id),
         )
         result = cursor.fetchone()
         cursor.close()
@@ -136,21 +136,15 @@ def get_latest_sensor_reading() -> Optional[Dict]:
         release_db_connection(conn)
 
 
-def get_recent_readings(limit: int = 50) -> List[Dict]:
+def get_recent_readings(limit: int = 50, owner_id: int = None) -> List[Dict]:
     """
-    Get the last N sensor readings, ordered newest first.
-
-    Args:
-        limit: Number of rows to return
-
-    Returns:
-        List of sensor reading dictionaries
+    Get the last N sensor readings for the given owner, ordered newest first.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-        query = """
+        cursor.execute(
+            """
             SELECT
                 id, timestamp,
                 temperature_c, temperature_status,
@@ -163,30 +157,22 @@ def get_recent_readings(limit: int = 50) -> List[Dict]:
                 door_open, ventilation_on,
                 error
             FROM sensor_readings_colson
+            WHERE owner_id = %s
             ORDER BY id DESC
             LIMIT %s
-        """
-
-        cursor.execute(query, (limit,))
+            """,
+            (owner_id, limit),
+        )
         results = cursor.fetchall()
         cursor.close()
-
         return [dict(row) for row in results]
     finally:
         release_db_connection(conn)
 
 
-def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
+def get_sensor_history(hours: float = 1, limit: int = 200, owner_id: int = None) -> List[Dict]:
     """
-    Get sensor readings from the past N hours, oldest first.
-    Used by the frontend chart to show historical trends.
-
-    Args:
-        hours: How many hours back to query
-        limit: Max rows to return (server-side downsampling)
-
-    Returns:
-        List of sensor reading dicts ordered by timestamp ASC
+    Get sensor readings from the past N hours for the given owner, oldest first.
     """
     conn = get_db_connection()
     try:
@@ -209,7 +195,8 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
             LEFT JOIN LATERAL (
                 SELECT number_of_chickens
                 FROM cv_counts_colson
-                WHERE ABS(EXTRACT(EPOCH FROM (timestamp - s.timestamp))) <= 300
+                WHERE (owner_id = %s OR owner_id IS NULL)
+                  AND ABS(EXTRACT(EPOCH FROM (timestamp - s.timestamp))) <= 300
                 ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - s.timestamp)))
                 LIMIT 1
             ) cv ON true
@@ -217,15 +204,17 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                 SELECT heat_risk_score, heat_risk_level, thi_current,
                        mold_risk_score, mold_risk_level
                 FROM risk_snapshots
-                WHERE ABS(EXTRACT(EPOCH FROM (created_at - s.timestamp))) <= 600
+                WHERE (owner_id = %s OR owner_id IS NULL)
+                  AND ABS(EXTRACT(EPOCH FROM (created_at - s.timestamp))) <= 600
                 ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - s.timestamp)))
                 LIMIT 1
             ) r ON true
             WHERE s.timestamp >= %s
+              AND s.owner_id = %s
             ORDER BY s.timestamp ASC
             LIMIT %s
             """,
-            (since, limit),
+            (owner_id, owner_id, since, owner_id, limit),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -262,10 +251,10 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
                 feeder_pct, waterer_pct,
                 h2s_ppm, h2s_level,
                 door_open, ventilation_on,
-                error
+                error, owner_id
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
         """
@@ -285,6 +274,7 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('door_open', False),
             sensor_data.get('ventilation_on', False),
             sensor_data.get('error'),
+            sensor_data.get('owner_id'),
         )
 
         cursor.execute(query, values)
@@ -305,18 +295,18 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
 # CV COUNTS
 # =============================================================================
 
-def insert_cv_count(chickens: int, eggs: int) -> int:
+def insert_cv_count(chickens: int, eggs: int, owner_id: int = None) -> int:
     """Insert a new row into cv_counts_colson. Returns the new row id."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO cv_counts_colson (timestamp, number_of_chickens, egg_count)
-            VALUES (%s, %s, %s)
+            INSERT INTO cv_counts_colson (timestamp, number_of_chickens, egg_count, owner_id)
+            VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
-            (datetime.now(), chickens, eggs),
+            (datetime.now(), chickens, eggs, owner_id),
         )
         row_id = cursor.fetchone()[0]
         conn.commit()
@@ -329,9 +319,9 @@ def insert_cv_count(chickens: int, eggs: int) -> int:
         release_db_connection(conn)
 
 
-def get_latest_cv_count() -> Optional[tuple]:
+def get_latest_cv_count(owner_id: int = None) -> Optional[tuple]:
     """
-    Return (number_of_chickens, egg_count) of the most recent row,
+    Return (number_of_chickens, egg_count) of the most recent row for the given owner,
     or None if the table is empty.
     """
     conn = get_db_connection()
@@ -341,9 +331,11 @@ def get_latest_cv_count() -> Optional[tuple]:
             """
             SELECT number_of_chickens, egg_count
             FROM cv_counts_colson
+            WHERE (owner_id = %s OR owner_id IS NULL)
             ORDER BY timestamp DESC
             LIMIT 1
-            """
+            """,
+            (owner_id,),
         )
         row = cursor.fetchone()
         cursor.close()
@@ -403,17 +395,14 @@ def insert_event(
     routing_decision: str = None,
     prompt_template: str = None,
     response_time_ms: int = None,
+    owner_id: int = None,
 ) -> int:
     """
     Log an event to the event_log table.
 
-    Used for:
-    - LLM responses (event_type='llm_response'): logs query + answer + sensor state
-    - Sensor alerts (event_type='sensor_alert'): logs threshold breaches
-    - Normal status (event_type='conditions_normal'): logs when conditions clear
-
-    Returns:
-        ID of inserted event row
+    owner_id=None means a system event (scheduler alerts, automation actions)
+    visible to all authenticated users. User-specific events (LLM responses)
+    should pass the authenticated user's owner_id.
     """
     conn = get_db_connection()
     try:
@@ -422,8 +411,8 @@ def insert_event(
             """INSERT INTO event_log
                (event_type, severity, user_query, llm_response, sensor_snapshot,
                 sensor_context_filtered, sources, routing_mode, routing_decision,
-                prompt_template, response_time_ms)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                prompt_template, response_time_ms, owner_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 event_type,
                 severity,
@@ -436,6 +425,7 @@ def insert_event(
                 routing_decision,
                 prompt_template,
                 response_time_ms,
+                owner_id,
             ),
         )
         event_id = cursor.fetchone()[0]
@@ -449,29 +439,27 @@ def insert_event(
         release_db_connection(conn)
 
 
-def get_recent_events(limit: int = 20, event_type: str = None) -> List[Dict]:
+def get_recent_events(limit: int = 20, event_type: str = None, owner_id: int = None) -> List[Dict]:
     """
     Get recent events from the log, newest first.
-
-    Args:
-        limit: Max rows to return
-        event_type: Optional filter (e.g. 'llm_response', 'sensor_alert')
-
-    Returns:
-        List of event dicts
+    Returns the user's own events plus system events (owner_id IS NULL).
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         if event_type:
             cursor.execute(
-                "SELECT * FROM event_log WHERE event_type = %s ORDER BY id DESC LIMIT %s",
-                (event_type, limit),
+                """SELECT * FROM event_log
+                   WHERE event_type = %s AND (owner_id = %s OR owner_id IS NULL)
+                   ORDER BY id DESC LIMIT %s""",
+                (event_type, owner_id, limit),
             )
         else:
             cursor.execute(
-                "SELECT * FROM event_log ORDER BY id DESC LIMIT %s",
-                (limit,),
+                """SELECT * FROM event_log
+                   WHERE owner_id = %s OR owner_id IS NULL
+                   ORDER BY id DESC LIMIT %s""",
+                (owner_id, limit),
             )
         rows = cursor.fetchall()
         cursor.close()
@@ -602,6 +590,7 @@ def insert_risk_snapshot(
     mold_index_m: Optional[int] = None,
     mold_consecutive_unfavourable_minutes: Optional[int] = None,
     contributing_factors: Optional[str] = None,
+    owner_id: Optional[int] = None,
 ) -> int:
     """Insert a risk snapshot row. Used by simulation and by the Pi pipeline."""
     conn = get_db_connection()
@@ -614,8 +603,8 @@ def insert_risk_snapshot(
                    mold_risk_score, mold_risk_level,
                    mold_favourable_for_growth, mold_index_m,
                    mold_consecutive_unfavourable_minutes,
-                   contributing_factors
-               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   contributing_factors, owner_id
+               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 int(round(float(heat_risk_score))) if heat_risk_score is not None else None,
@@ -628,6 +617,7 @@ def insert_risk_snapshot(
                 mold_index_m,
                 mold_consecutive_unfavourable_minutes,
                 contributing_factors,
+                owner_id,
             ),
         )
         row_id = cursor.fetchone()[0]
@@ -641,13 +631,16 @@ def insert_risk_snapshot(
         release_db_connection(conn)
 
 
-def get_latest_risk_snapshot() -> Optional[Dict]:
-    """Return the most recent row from risk_snapshots including all columns."""
+def get_latest_risk_snapshot(owner_id: int = None) -> Optional[Dict]:
+    """Return the most recent risk snapshot for the given owner (or system-level if NULL)."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
-            "SELECT * FROM risk_snapshots ORDER BY created_at DESC LIMIT 1"
+            """SELECT * FROM risk_snapshots
+               WHERE (owner_id = %s OR owner_id IS NULL)
+               ORDER BY created_at DESC LIMIT 1""",
+            (owner_id,),
         )
         row = cursor.fetchone()
         cursor.close()
@@ -660,36 +653,35 @@ def get_latest_risk_snapshot() -> Optional[Dict]:
 # EGG CALENDAR
 # =============================================================================
 
-def upsert_egg_entry(entry_date, eggs_laid: int, source: str = "auto") -> None:
+def upsert_egg_entry(entry_date, eggs_laid: int, source: str = "auto", owner_id: int = None) -> None:
     """
-    Insert or update an egg calendar entry. Manual edits win over automatic
-    reconciliation: if an entry exists with source='manual' and the incoming
-    source is 'auto', the existing row is left untouched.
+    Insert or update an egg calendar entry for the given owner.
+    Manual edits win over automatic reconciliation.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         if source == "auto":
             cursor.execute(
-                """INSERT INTO egg_calendar_entries (entry_date, eggs_laid, source, updated_at)
-                   VALUES (%s, %s, 'auto', CURRENT_TIMESTAMP)
-                   ON CONFLICT (entry_date) DO UPDATE SET
+                """INSERT INTO egg_calendar_entries (owner_id, entry_date, eggs_laid, source, updated_at)
+                   VALUES (%s, %s, %s, 'auto', CURRENT_TIMESTAMP)
+                   ON CONFLICT (owner_id, entry_date) DO UPDATE SET
                        eggs_laid = CASE
                            WHEN egg_calendar_entries.source = 'manual' THEN egg_calendar_entries.eggs_laid
                            ELSE EXCLUDED.eggs_laid
                        END,
                        updated_at = CURRENT_TIMESTAMP""",
-                (entry_date, eggs_laid),
+                (owner_id, entry_date, eggs_laid),
             )
         else:
             cursor.execute(
-                """INSERT INTO egg_calendar_entries (entry_date, eggs_laid, source, updated_at)
-                   VALUES (%s, %s, 'manual', CURRENT_TIMESTAMP)
-                   ON CONFLICT (entry_date) DO UPDATE SET
+                """INSERT INTO egg_calendar_entries (owner_id, entry_date, eggs_laid, source, updated_at)
+                   VALUES (%s, %s, %s, 'manual', CURRENT_TIMESTAMP)
+                   ON CONFLICT (owner_id, entry_date) DO UPDATE SET
                        eggs_laid = EXCLUDED.eggs_laid,
                        source = 'manual',
                        updated_at = CURRENT_TIMESTAMP""",
-                (entry_date, eggs_laid),
+                (owner_id, entry_date, eggs_laid),
             )
         conn.commit()
         cursor.close()
@@ -700,18 +692,19 @@ def upsert_egg_entry(entry_date, eggs_laid: int, source: str = "auto") -> None:
         release_db_connection(conn)
 
 
-def get_egg_entries_for_month(year: int, month: int) -> List[Dict]:
-    """Return all egg calendar entries in the given month."""
+def get_egg_entries_for_month(year: int, month: int, owner_id: int = None) -> List[Dict]:
+    """Return all egg calendar entries in the given month for the given owner."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
             """SELECT entry_date, eggs_laid, source, updated_at
                FROM egg_calendar_entries
-               WHERE EXTRACT(YEAR FROM entry_date) = %s
+               WHERE owner_id = %s
+                 AND EXTRACT(YEAR FROM entry_date) = %s
                  AND EXTRACT(MONTH FROM entry_date) = %s
                ORDER BY entry_date ASC""",
-            (year, month),
+            (owner_id, year, month),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -720,8 +713,8 @@ def get_egg_entries_for_month(year: int, month: int) -> List[Dict]:
         release_db_connection(conn)
 
 
-def get_cv_egg_counts_for_date(target_date) -> List[Dict]:
-    """Return all cv_counts_colson egg_count samples for a given date, ordered by time."""
+def get_cv_egg_counts_for_date(target_date, owner_id: int = None) -> List[Dict]:
+    """Return all cv_counts_colson egg_count samples for a given date and owner."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -729,8 +722,9 @@ def get_cv_egg_counts_for_date(target_date) -> List[Dict]:
             """SELECT timestamp, egg_count
                FROM cv_counts_colson
                WHERE timestamp::date = %s
+                 AND (owner_id = %s OR owner_id IS NULL)
                ORDER BY timestamp ASC""",
-            (target_date,),
+            (target_date, owner_id),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -766,16 +760,17 @@ def insert_chore_log(
     definition_id: int,
     checked_items: Optional[List[str]] = None,
     notes: str = "",
+    owner_id: int = None,
 ) -> int:
     """Record a completed chore."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO chore_log (entry_date, definition_id, checked_items, notes)
-               VALUES (%s, %s, %s::jsonb, %s)
+            """INSERT INTO chore_log (entry_date, definition_id, checked_items, notes, owner_id)
+               VALUES (%s, %s, %s::jsonb, %s, %s)
                RETURNING id""",
-            (entry_date, definition_id, json.dumps(checked_items or []), notes),
+            (entry_date, definition_id, json.dumps(checked_items or []), notes, owner_id),
         )
         log_id = cursor.fetchone()[0]
         conn.commit()
@@ -788,12 +783,12 @@ def insert_chore_log(
         release_db_connection(conn)
 
 
-def delete_chore_log(log_id: int) -> int:
-    """Remove a chore log entry. Returns rows deleted (0 or 1)."""
+def delete_chore_log(log_id: int, owner_id: int = None) -> int:
+    """Remove a chore log entry owned by owner_id. Returns rows deleted (0 or 1)."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chore_log WHERE id = %s", (log_id,))
+        cursor.execute("DELETE FROM chore_log WHERE id = %s AND owner_id = %s", (log_id, owner_id))
         rowcount = cursor.rowcount
         conn.commit()
         cursor.close()
@@ -805,8 +800,8 @@ def delete_chore_log(log_id: int) -> int:
         release_db_connection(conn)
 
 
-def get_chore_log_in_range(start_date, end_date) -> List[Dict]:
-    """Return chore log entries between start_date and end_date inclusive, joined with definitions."""
+def get_chore_log_in_range(start_date, end_date, owner_id: int = None) -> List[Dict]:
+    """Return chore log entries for the given owner between start_date and end_date inclusive."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -817,8 +812,9 @@ def get_chore_log_in_range(start_date, end_date) -> List[Dict]:
                FROM chore_log cl
                JOIN chore_definitions cd ON cd.id = cl.definition_id
                WHERE cl.entry_date BETWEEN %s AND %s
+                 AND cl.owner_id = %s
                ORDER BY cl.entry_date DESC, cl.completed_at DESC""",
-            (start_date, end_date),
+            (start_date, end_date, owner_id),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -841,6 +837,7 @@ def insert_automation_window(
     start_time=None,
     end_time=None,
     days_of_week: Optional[List[int]] = None,
+    owner_id: int = None,
 ) -> int:
     """Create an automation window. Raises ValueError on invalid task."""
     if task not in ALLOWED_AUTOMATION_TASKS:
@@ -850,12 +847,13 @@ def insert_automation_window(
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO automation_windows
-                   (task, start_date, end_date, start_time, end_time, days_of_week)
-               VALUES (%s, %s, %s, %s, %s, %s)
+                   (task, start_date, end_date, start_time, end_time, days_of_week, owner_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 task, start_date, end_date, start_time, end_time,
                 days_of_week if days_of_week is not None else [0, 1, 2, 3, 4, 5, 6],
+                owner_id,
             ),
         )
         win_id = cursor.fetchone()[0]
@@ -869,12 +867,12 @@ def insert_automation_window(
         release_db_connection(conn)
 
 
-def delete_automation_window(win_id: int) -> int:
-    """Remove an automation window. Returns rows deleted (0 or 1)."""
+def delete_automation_window(win_id: int, owner_id: int = None) -> int:
+    """Remove an automation window owned by owner_id. Returns rows deleted (0 or 1)."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM automation_windows WHERE id = %s", (win_id,))
+        cursor.execute("DELETE FROM automation_windows WHERE id = %s AND owner_id = %s", (win_id, owner_id))
         rowcount = cursor.rowcount
         conn.commit()
         cursor.close()
@@ -886,8 +884,8 @@ def delete_automation_window(win_id: int) -> int:
         release_db_connection(conn)
 
 
-def get_automation_windows_in_range(start_date, end_date) -> List[Dict]:
-    """Return automation windows that overlap the given date range."""
+def get_automation_windows_in_range(start_date, end_date, owner_id: int = None) -> List[Dict]:
+    """Return automation windows for the given owner that overlap the given date range."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -896,10 +894,11 @@ def get_automation_windows_in_range(start_date, end_date) -> List[Dict]:
                       days_of_week, enabled, created_at
                FROM automation_windows
                WHERE enabled = TRUE
+                 AND owner_id = %s
                  AND start_date <= %s
                  AND end_date >= %s
                ORDER BY start_date ASC""",
-            (end_date, start_date),
+            (owner_id, end_date, start_date),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -908,8 +907,8 @@ def get_automation_windows_in_range(start_date, end_date) -> List[Dict]:
         release_db_connection(conn)
 
 
-def get_feeder_waterer_samples_for_date(target_date) -> List[Dict]:
-    """Return feeder_pct/waterer_pct samples for a given date, ordered by time."""
+def get_feeder_waterer_samples_for_date(target_date, owner_id: int = None) -> List[Dict]:
+    """Return feeder_pct/waterer_pct samples for a given date and owner, ordered by time."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -917,9 +916,10 @@ def get_feeder_waterer_samples_for_date(target_date) -> List[Dict]:
             """SELECT timestamp, feeder_pct, waterer_pct
                FROM sensor_readings_colson
                WHERE timestamp::date = %s
+                 AND owner_id = %s
                  AND (feeder_pct IS NOT NULL OR waterer_pct IS NOT NULL)
                ORDER BY timestamp ASC""",
-            (target_date,),
+            (target_date, owner_id),
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -1031,13 +1031,10 @@ def upsert_review(
 def get_events_for_review(
     limit: int = 50,
     reviewed: bool = None,
+    owner_id: int = None,
 ) -> List[Dict]:
     """
-    Get llm_response events with review status.
-
-    Args:
-        limit: Max rows
-        reviewed: None=all, True=only reviewed, False=only unreviewed
+    Get llm_response events with review status for the given owner.
     """
     conn = get_db_connection()
     try:
@@ -1048,13 +1045,16 @@ def get_events_for_review(
             FROM event_log e
             LEFT JOIN response_reviews r ON r.event_id = e.id
             WHERE e.event_type = 'llm_response'
+              AND e.owner_id = %s
         """
+        params = [owner_id]
         if reviewed is True:
             base += " AND r.id IS NOT NULL"
         elif reviewed is False:
             base += " AND r.id IS NULL"
         base += " ORDER BY e.id DESC LIMIT %s"
-        cursor.execute(base, (limit,))
+        params.append(limit)
+        cursor.execute(base, params)
         rows = cursor.fetchall()
         cursor.close()
         return [dict(r) for r in rows]
@@ -1062,8 +1062,8 @@ def get_events_for_review(
         release_db_connection(conn)
 
 
-def export_reviews() -> List[Dict]:
-    """Export all llm_response events with reviews for paper analysis."""
+def export_reviews(owner_id: int = None) -> List[Dict]:
+    """Export all llm_response events with reviews for the given owner."""
     conn = get_db_connection()
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
@@ -1077,11 +1077,80 @@ def export_reviews() -> List[Dict]:
             FROM event_log e
             LEFT JOIN response_reviews r ON r.event_id = e.id
             WHERE e.event_type = 'llm_response'
+              AND e.owner_id = %s
             ORDER BY e.id
-        """)
+        """, (owner_id,))
         rows = cursor.fetchall()
         cursor.close()
         return [dict(r) for r in rows]
+    finally:
+        release_db_connection(conn)
+
+
+# =============================================================================
+# USERS TABLE
+# =============================================================================
+
+CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id         SERIAL PRIMARY KEY,
+    username   TEXT NOT NULL UNIQUE,
+    hashed_pw  TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+"""
+
+MIGRATE_ADD_OWNER_ID_SQL = """
+ALTER TABLE sensor_readings_colson   ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE cv_counts_colson         ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE risk_snapshots           ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE event_log                ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE response_reviews         ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE egg_calendar_entries     ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE chore_log                ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+ALTER TABLE automation_windows       ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
+
+CREATE INDEX IF NOT EXISTS idx_sensor_owner     ON sensor_readings_colson(owner_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_event_owner      ON event_log(owner_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_egg_owner        ON egg_calendar_entries(owner_id, entry_date);
+CREATE INDEX IF NOT EXISTS idx_chore_owner      ON chore_log(owner_id, entry_date DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_owner ON automation_windows(owner_id, start_date, end_date);
+"""
+
+
+def create_user(username: str, hashed_pw: str) -> int:
+    """Insert a new user and return their id."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO users (username, hashed_pw) VALUES (%s, %s) RETURNING id",
+            (username, hashed_pw),
+        )
+        user_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        return user_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
+def get_user_by_username(username: str) -> Optional[Dict]:
+    """Return {id, username, hashed_pw} or None if not found."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "SELECT id, username, hashed_pw FROM users WHERE username = %s",
+            (username,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return dict(row) if row else None
     finally:
         release_db_connection(conn)
 
@@ -1094,6 +1163,7 @@ def setup_database():
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        cursor.execute(CREATE_USERS_SQL)
         cursor.execute(CREATE_SENSOR_READINGS_COLSON_SQL)
         cursor.execute(MIGRATE_SENSOR_READINGS_SQL)
         cursor.execute(CREATE_CROWDING_SQL)
@@ -1106,10 +1176,30 @@ def setup_database():
         cursor.execute(CREATE_CHORE_DEFINITIONS_SQL)
         cursor.execute(CREATE_CHORE_LOG_SQL)
         cursor.execute(CREATE_AUTOMATION_WINDOWS_SQL)
+        cursor.execute(MIGRATE_ADD_OWNER_ID_SQL)
         _seed_default_chores(cursor)
+
+        # Migrate egg_calendar_entries PK from (entry_date) to (owner_id, entry_date)
+        # Only runs if the composite PK doesn't exist yet.
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.table_constraints
+            WHERE table_name = 'egg_calendar_entries'
+              AND constraint_type = 'PRIMARY KEY'
+              AND constraint_name != 'egg_calendar_entries_pkey'
+        """)
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                ALTER TABLE egg_calendar_entries DROP CONSTRAINT IF EXISTS egg_calendar_entries_pkey;
+            """)
+            cursor.execute("""
+                ALTER TABLE egg_calendar_entries
+                    ADD CONSTRAINT egg_calendar_entries_pkey
+                    PRIMARY KEY (owner_id, entry_date);
+            """)
+
         conn.commit()
         cursor.close()
-        print("Database tables created successfully (sensor + cv + risk_snapshots + event_log + reviews + egg/chore/automation)")
+        print("Database tables created successfully (users + sensor + cv + risk_snapshots + event_log + reviews + egg/chore/automation)")
     finally:
         release_db_connection(conn)
 
