@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getSensors } from '../api'
+import { getSensors, getHeatmapLatest } from '../api'
 
 function StatCard({ icon, label, value, sub }) {
   return (
@@ -48,7 +48,7 @@ export default function HeatmapView() {
       try {
         const [sensors, heatmap] = await Promise.all([
           getSensors(),
-          fetch('/heatmap/latest').then(r => r.ok ? r.json() : null).catch(() => null),
+          getHeatmapLatest(),
         ])
         setSensorData(sensors?.reading ?? null)
         if (heatmap?.url) {

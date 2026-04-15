@@ -201,3 +201,10 @@ export async function getRiskLatest() {
   if (!res.ok) throw new Error(`Risk fetch failed (${res.status})`)
   return res.json()
 }
+
+export async function getHeatmapLatest() {
+  const res = await apiFetch('/heatmap/latest', { headers: { ...getAuthHeaders() } })
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`Heatmap fetch failed (${res.status})`)
+  return res.json()
+}
