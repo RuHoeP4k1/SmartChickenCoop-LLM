@@ -145,7 +145,9 @@ function AddChickenCard() {
   )
 }
 
-export default function MyChickens() {
+export default function MyChickens({ currentUser }) {
+  const myChickens = currentUser?.username === 'OurCoop' ? CHICKENS : []
+
   return (
     <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
       <div className="max-w-4xl mx-auto animate-fade-in">
@@ -156,7 +158,7 @@ export default function MyChickens() {
           Get to know your flock — tap a card to learn more
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {CHICKENS.map((c) => (
+          {myChickens.map((c) => (
             <ChickenCard key={c.name} chicken={c} />
           ))}
           <AddChickenCard />

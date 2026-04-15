@@ -83,7 +83,7 @@ export default function App() {
       <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><CoopLog /></div>
       <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
-      <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>
+      <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens currentUser={currentUser} /></div>
       <div className={activeTab === 'packages'   ? 'h-full' : 'hidden'}><Packages /></div>
       <div className={activeTab === 'flock'      ? 'h-full' : 'hidden'}><HeatmapView /></div>
     </Layout>
