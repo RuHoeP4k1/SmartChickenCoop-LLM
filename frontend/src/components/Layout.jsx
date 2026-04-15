@@ -274,7 +274,7 @@ function useFooterData() {
 
 /* ── Layout ───────────────────────────────────────────────────────── */
 
-export default function Layout({ tabs, activeTab, onTabChange, children }) {
+export default function Layout({ tabs, activeTab, onTabChange, children, currentUser, onLogout }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -396,6 +396,22 @@ export default function Layout({ tabs, activeTab, onTabChange, children }) {
           <IconChevron className="w-5 h-5 shrink-0" direction={collapsed ? 'right' : 'left'} />
           {!collapsed && <span>Collapse</span>}
         </button>
+
+        {/* Logged-in user + logout */}
+        {currentUser && (
+          <button
+            onClick={onLogout}
+            title="Sign out"
+            className={`w-full flex items-center gap-3 rounded-lg text-sm font-medium text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-700/40 hover:text-red-500 dark:hover:text-red-400 transition-all duration-150 ${
+              collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5'
+            }`}
+          >
+            <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
+            </svg>
+            {!collapsed && <span>{currentUser.username} · Sign out</span>}
+          </button>
+        )}
       </div>
     </>
   )

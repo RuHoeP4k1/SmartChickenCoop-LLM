@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
+import { getMe, logout } from './api'
 import Layout from './components/Layout'
+import LoginPage from './components/LoginPage'
 import Welcome from './components/Welcome'
 import ChatPanel from './components/ChatPanel'
 import SensorDashboard from './components/SensorDashboard'
@@ -34,14 +36,38 @@ const TABS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('welcome')
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
+
+  useEffect(() => {
+    getMe().then(user => {
+      setCurrentUser(user)
+      setAuthChecked(true)
+    })
+  }, [])
 
   useEffect(() => {
     const tab = TABS.find(t => t.id === activeTab)
     document.title = tab?.title ?? 'ChickenCoopComfort'
   }, [activeTab])
 
+  function handleLogin(username) {
+    setCurrentUser({ username })
+  }
+
+  function handleLogout() {
+    logout()
+    setCurrentUser(null)
+  }
+
+  if (!authChecked) return null
+
+  if (!currentUser) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
   return (
-    <Layout tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab}>
+    <Layout tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} currentUser={currentUser} onLogout={handleLogout}>
       <div className={activeTab === 'welcome'    ? 'h-full' : 'hidden'}><Welcome onNavigate={setActiveTab} /></div>
       <div className={activeTab === 'chat'       ? 'h-full' : 'hidden'}><ChatPanel /></div>
       <div className={activeTab === 'sensors'    ? 'h-full' : 'hidden'}><SensorDashboard /></div>
