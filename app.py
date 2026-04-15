@@ -41,6 +41,7 @@ from backend.db_utils import (
     get_automation_windows_in_range,
     ALLOWED_AUTOMATION_TASKS,
     get_latest_risk_snapshot,
+    get_user_location, update_user_location,
 )
 from backend.sensor_filter import (
     get_sensor_context, get_critical_alerts,
@@ -407,26 +408,52 @@ def get_risk_latest(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/weather")
-def get_weather():
+def get_weather(current_user: dict = Depends(get_current_user)):
     """
-    Fetch current weather + 3-day forecast for the coop location via Open-Meteo.
-    No API key required. Coordinates set via COOP_LAT / COOP_LON in .env.
+    Fetch current weather + 3-day forecast for the user's saved coop location.
+    Falls back to the server-default COOP_LAT/COOP_LON if the user hasn't set one.
+    Returns location_name alongside the weather data.
     """
+    loc = get_user_location(current_user["user_id"])
+    if loc:
+        lat = loc["latitude"]
+        lon = loc["longitude"]
+        location_name = loc["location_name"]
+    else:
+        lat = COOP_LAT
+        lon = COOP_LON
+        location_name = None
+
     url = (
         "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={COOP_LAT}&longitude={COOP_LON}"
+        f"?latitude={lat}&longitude={lon}"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
         "precipitation,weather_code,wind_speed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,"
         "sunrise,sunset,daylight_duration,weather_code"
-        "&timezone=Europe%2FBrussels&forecast_days=3"
+        "&timezone=auto&forecast_days=3"
     )
     try:
         resp = httpx.get(url, timeout=8)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        data["location_name"] = location_name
+        return data
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Weather API error: {e}")
+
+
+class LocationRequest(BaseModel):
+    latitude: float
+    longitude: float
+    location_name: str
+
+
+@app.patch("/auth/location")
+def set_location(body: LocationRequest, current_user: dict = Depends(get_current_user)):
+    """Save the user's coop location (lat/lon + display name)."""
+    update_user_location(current_user["user_id"], body.latitude, body.longitude, body.location_name)
+    return {"status": "ok", "location_name": body.location_name}
 
 
 # ---------------------------------------------------------------------------

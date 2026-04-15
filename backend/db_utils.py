@@ -1101,6 +1101,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 """
 
+MIGRATE_ADD_LOCATION_SQL = """
+ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude       DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude      DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS location_name  TEXT;
+"""
+
 MIGRATE_ADD_OWNER_ID_SQL = """
 ALTER TABLE sensor_readings_colson   ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
 ALTER TABLE cv_counts_colson         ADD COLUMN IF NOT EXISTS owner_id INTEGER REFERENCES users(id);
@@ -1155,6 +1161,42 @@ def get_user_by_username(username: str) -> Optional[Dict]:
         release_db_connection(conn)
 
 
+def get_user_location(user_id: int) -> Optional[Dict]:
+    """Return {latitude, longitude, location_name} for the user, or None if not set."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "SELECT latitude, longitude, location_name FROM users WHERE id = %s",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if not row or row["latitude"] is None:
+            return None
+        return dict(row)
+    finally:
+        release_db_connection(conn)
+
+
+def update_user_location(user_id: int, latitude: float, longitude: float, location_name: str) -> None:
+    """Save or update a user's coop location."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET latitude = %s, longitude = %s, location_name = %s WHERE id = %s",
+            (latitude, longitude, location_name, user_id),
+        )
+        conn.commit()
+        cursor.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
 def setup_database():
     """
     Create all tables if they don't exist.
@@ -1177,6 +1219,7 @@ def setup_database():
         cursor.execute(CREATE_CHORE_LOG_SQL)
         cursor.execute(CREATE_AUTOMATION_WINDOWS_SQL)
         cursor.execute(MIGRATE_ADD_OWNER_ID_SQL)
+        cursor.execute(MIGRATE_ADD_LOCATION_SQL)
         _seed_default_chores(cursor)
 
         # Migrate egg_calendar_entries PK from (entry_date) to (owner_id, entry_date)

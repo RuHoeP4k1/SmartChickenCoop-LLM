@@ -156,8 +156,18 @@ export async function getEvents(limit = 30, eventType = null) {
 }
 
 export async function getWeather() {
-  const res = await apiFetch('/weather')
+  const res = await apiFetch('/weather', { headers: { ...getAuthHeaders() } })
   if (!res.ok) throw new Error(`Weather request failed (${res.status})`)
+  return res.json()
+}
+
+export async function setLocation(latitude, longitude, locationName) {
+  const res = await apiFetch('/auth/location', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ latitude, longitude, location_name: locationName }),
+  })
+  if (!res.ok) throw new Error(`Location update failed (${res.status})`)
   return res.json()
 }
 
