@@ -7,17 +7,20 @@ import os
 import asyncio
 import calendar
 import logging
-import secrets
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date, time as dtime, timedelta
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, StringConstraints
 from typing import Optional, List, Annotated
+from jose import JWTError
+from backend.auth import hash_password, verify_password, create_access_token, decode_token
+from backend.db_utils import create_user, get_user_by_username
 
 # Bounded string type for list elements (prevents unbounded JSONB blobs)
 BoundedStr = Annotated[str, StringConstraints(max_length=200)]
@@ -135,20 +138,18 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# API key auth
+# JWT auth
 
-_API_KEY = os.getenv("API_KEY")
-if not _API_KEY:
-    logging.warning("API_KEY env var not set — POST /ask is unprotected")
-
-_bearer = HTTPBearer(auto_error=False)
+_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-def verify_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    if not _API_KEY:
-        return  # no key configured → open for local dev
-    if not credentials or not secrets.compare_digest(credentials.credentials, _API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+def get_current_user(token: str = Depends(_oauth2_scheme)) -> dict:
+    """Decode JWT and return {user_id, username}. Raises 401 on invalid/expired token."""
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return {"user_id": int(payload["sub"]), "username": payload["username"]}
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +182,57 @@ class ReviewRequest(BaseModel):
     notes: str = ""
 
 
+class RegisterRequest(BaseModel):
+    username: Annotated[str, StringConstraints(min_length=3, max_length=50)]
+    password: Annotated[str, StringConstraints(min_length=8, max_length=100)]
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    username: str
+    user_id: int
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/register", status_code=201)
+def register(body: RegisterRequest):
+    """Create a new user account."""
+    if get_user_by_username(body.username):
+        raise HTTPException(status_code=409, detail="Username already taken")
+    hashed = hash_password(body.password)
+    user_id = create_user(body.username, hashed)
+    return {"id": user_id, "username": body.username}
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(body: LoginRequest):
+    """Authenticate and return a JWT access token."""
+    user = get_user_by_username(body.username)
+    if not user or not verify_password(body.password, user["hashed_pw"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(user["id"], user["username"])
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        username=user["username"],
+        user_id=user["id"],
+    )
+
+
+@app.get("/auth/me")
+def me(current_user: dict = Depends(get_current_user)):
+    """Return the currently authenticated user."""
+    return {"user_id": current_user["user_id"], "username": current_user["username"]}
+
 
 # ---------------------------------------------------------------------------
 # Core endpoints
@@ -212,7 +264,7 @@ def health_check():
 
 
 @app.post("/ask", response_model=QueryResponse)
-def ask_question(request: QueryRequest, _=Depends(verify_key)):
+def ask_question(request: QueryRequest, current_user: dict = Depends(get_current_user)):
     """
     Ask a chicken-keeping question.
     Uses RAG pipeline with optional sensor context.
@@ -251,6 +303,7 @@ def ask_question(request: QueryRequest, _=Depends(verify_key)):
             routing_decision=result.get("routing_decision"),
             prompt_template=result.get("prompt_template"),
             response_time_ms=result.get("response_time_ms"),
+            owner_id=current_user["user_id"],
         )
     except Exception as e:
         logger.warning(f"Failed to log event: {e}")
@@ -280,10 +333,10 @@ def setup_db():
 # ---------------------------------------------------------------------------
 
 @app.get("/sensors")
-def get_sensors():
+def get_sensors(current_user: dict = Depends(get_current_user)):
     """Get the latest sensor reading."""
     try:
-        reading = get_latest_sensor_reading()
+        reading = get_latest_sensor_reading(owner_id=current_user["user_id"])
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
@@ -304,15 +357,11 @@ def get_sensors():
 def get_events(
     limit: int = Query(20, ge=1, le=100),
     event_type: Optional[str] = Query(None, description="Filter: llm_response, sensor_alert, conditions_normal"),
+    current_user: dict = Depends(get_current_user),
 ):
-    """
-    Get recent events from the event log.
-    The scheduler writes sensor_alert / conditions_normal events here.
-    The /ask endpoint writes llm_response events here.
-    Use this to review system performance or show alerts in the frontend.
-    """
+    """Get recent events — user's own events plus system events (owner_id IS NULL)."""
     try:
-        events = get_recent_events(limit=limit, event_type=event_type)
+        events = get_recent_events(limit=limit, event_type=event_type, owner_id=current_user["user_id"])
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
@@ -326,11 +375,9 @@ def get_events(
 @app.get("/sensors/history")
 def get_history(
     range: str = Query("1h", description="Time range: 1h, 24h, 7d"),
+    current_user: dict = Depends(get_current_user),
 ):
-    """
-    Return sensor readings for the past 1h / 24h / 7d.
-    Used by the frontend chart to plot historical trends.
-    """
+    """Return sensor readings for the past 1h / 24h / 7d."""
     range_hours = {"1h": 1, "24h": 24, "7d": 168}
     range_limit = {"1h": 120, "24h": 300, "7d": 500}
 
@@ -338,7 +385,7 @@ def get_history(
     limit = range_limit.get(range, 120)
 
     try:
-        readings = get_sensor_history(hours=hours, limit=limit)
+        readings = get_sensor_history(hours=hours, limit=limit, owner_id=current_user["user_id"])
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
@@ -346,10 +393,10 @@ def get_history(
 
 
 @app.get("/risk/latest")
-def get_risk_latest():
+def get_risk_latest(current_user: dict = Depends(get_current_user)):
     """Return the most recent risk snapshot (heat + mold + ventilation metrics)."""
     try:
-        snapshot = get_latest_risk_snapshot()
+        snapshot = get_latest_risk_snapshot(owner_id=current_user["user_id"])
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {e}")
 
@@ -391,28 +438,28 @@ _HEATMAP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.get("/heatmap/latest")
-async def get_latest_heatmap():
-    """Return the most recently uploaded heatmap image metadata, or 404 if none."""
-    images = list(_HEATMAP_DIR.glob("*.png")) + list(_HEATMAP_DIR.glob("*.jpg"))
+async def get_latest_heatmap(current_user: dict = Depends(get_current_user)):
+    """Return the most recently uploaded heatmap for the current user."""
+    owner_dir = _HEATMAP_DIR / str(current_user["user_id"])
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    images = list(owner_dir.glob("*.png")) + list(owner_dir.glob("*.jpg"))
     if not images:
         raise HTTPException(status_code=404, detail="No heatmap available yet")
     latest = max(images, key=lambda f: f.stat().st_mtime)
-    return {
-        "url": f"/static/uploads/heatmaps/{latest.name}",
-        "filename": latest.name,
-        "timestamp": latest.stat().st_mtime,
-    }
+    return FileResponse(latest, media_type="image/png")
 
 
 @app.post("/heatmap/upload")
-async def upload_heatmap(file: UploadFile = File(...)):
+async def upload_heatmap(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """Accept a heatmap image from the CV pipeline (Raspberry Pi)."""
+    owner_dir = _HEATMAP_DIR / str(current_user["user_id"])
+    owner_dir.mkdir(parents=True, exist_ok=True)
     ts = int(datetime.utcnow().timestamp())
     filename = f"{ts}_{file.filename}"
-    dest = _HEATMAP_DIR / filename
+    dest = owner_dir / filename
     dest.write_bytes(await file.read())
-    logger.info(f"Heatmap received: {filename}")
-    return {"url": f"/static/uploads/heatmaps/{filename}", "filename": filename}
+    logger.info(f"Heatmap received for user {current_user['user_id']}: {filename}")
+    return {"filename": filename}
 
 
 # ---------------------------------------------------------------------------
@@ -420,19 +467,19 @@ async def upload_heatmap(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @app.get("/reviews")
-def get_reviews(limit: int = 50, reviewed: Optional[str] = None):
+def get_reviews(limit: int = 50, reviewed: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Get llm_response events with review status for the Review tab."""
     reviewed_bool = None
     if reviewed == "true":
         reviewed_bool = True
     elif reviewed == "false":
         reviewed_bool = False
-    events = get_events_for_review(limit=min(limit, 200), reviewed=reviewed_bool)
+    events = get_events_for_review(limit=min(limit, 200), reviewed=reviewed_bool, owner_id=current_user["user_id"])
     return {"events": events, "count": len(events)}
 
 
 @app.post("/reviews")
-def submit_review(review: ReviewRequest):
+def submit_review(review: ReviewRequest, current_user: dict = Depends(get_current_user)):
     """Submit or update a review for an event_log entry."""
     review_id = upsert_review(
         event_id=review.event_id,
@@ -444,9 +491,9 @@ def submit_review(review: ReviewRequest):
 
 
 @app.get("/reviews/export")
-def export_reviews_endpoint():
+def export_reviews_endpoint(current_user: dict = Depends(get_current_user)):
     """Export all events + reviews as JSON (frontend converts to CSV)."""
-    rows = export_reviews()
+    rows = export_reviews(owner_id=current_user["user_id"])
     return {"data": rows, "count": len(rows)}
 
 
@@ -508,6 +555,7 @@ def get_coop_log_month(
     year: int = Query(..., ge=2000, le=2100, description="4-digit year"),
     month: int = Query(..., ge=1, le=12),
     include_consumption: bool = Query(True),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Return a combined month view for the Coop Log tab:
@@ -520,10 +568,11 @@ def get_coop_log_month(
     first = date(year, month, 1)
     last = date(year, month, days_in_month)
 
+    owner_id = current_user["user_id"]
     try:
-        eggs = get_egg_entries_for_month(year, month)
-        chores = get_chore_log_in_range(first, last)
-        windows = get_automation_windows_in_range(first, last)
+        eggs = get_egg_entries_for_month(year, month, owner_id=owner_id)
+        chores = get_chore_log_in_range(first, last, owner_id=owner_id)
+        windows = get_automation_windows_in_range(first, last, owner_id=owner_id)
     except Exception as e:
         raise _db_error(e)
 
@@ -594,17 +643,17 @@ def get_coop_log_month(
 
 
 @app.post("/eggs/calendar/{entry_date}")
-def set_egg_entry(entry_date: date, body: EggEntryRequest):
+def set_egg_entry(entry_date: date, body: EggEntryRequest, current_user: dict = Depends(get_current_user)):
     """Manually set (or correct) the egg count for a specific date."""
     try:
-        upsert_egg_entry(entry_date, body.eggs_laid, source="manual")
+        upsert_egg_entry(entry_date, body.eggs_laid, source="manual", owner_id=current_user["user_id"])
     except Exception as e:
         raise _db_error(e)
     return {"status": "ok", "entry_date": entry_date.isoformat(), "eggs_laid": body.eggs_laid}
 
 
 @app.post("/eggs/reconcile")
-def trigger_reconcile(entry_date: Optional[date] = Query(None)):
+def trigger_reconcile(entry_date: Optional[date] = Query(None), current_user: dict = Depends(get_current_user)):
     """Manually trigger egg reconciliation for a date (default: yesterday)."""
     try:
         eggs = reconcile_day(entry_date)
@@ -627,7 +676,7 @@ def list_chore_definitions():
 
 
 @app.post("/chores/log")
-def add_chore_log(body: ChoreLogRequest):
+def add_chore_log(body: ChoreLogRequest, current_user: dict = Depends(get_current_user)):
     """Record a completed chore for a specific date."""
     try:
         log_id = insert_chore_log(
@@ -635,6 +684,7 @@ def add_chore_log(body: ChoreLogRequest):
             definition_id=body.definition_id,
             checked_items=body.checked_items,
             notes=body.notes,
+            owner_id=current_user["user_id"],
         )
     except Exception as e:
         raise _db_error(e)
@@ -642,9 +692,9 @@ def add_chore_log(body: ChoreLogRequest):
 
 
 @app.delete("/chores/log/{log_id}")
-def remove_chore_log(log_id: int):
+def remove_chore_log(log_id: int, current_user: dict = Depends(get_current_user)):
     try:
-        removed = delete_chore_log(log_id)
+        removed = delete_chore_log(log_id, owner_id=current_user["user_id"])
     except Exception as e:
         raise _db_error(e)
     if removed == 0:
@@ -656,6 +706,7 @@ def remove_chore_log(log_id: int):
 def list_automation_windows(
     start: date = Query(...),
     end: date = Query(...),
+    current_user: dict = Depends(get_current_user),
 ):
     if end < start:
         raise HTTPException(status_code=400, detail="end must be >= start")
@@ -665,13 +716,13 @@ def list_automation_windows(
             detail=f"date range too large (max {_MAX_AUTOMATION_SPAN_DAYS} days)",
         )
     try:
-        return {"windows": get_automation_windows_in_range(start, end)}
+        return {"windows": get_automation_windows_in_range(start, end, owner_id=current_user["user_id"])}
     except Exception as e:
         raise _db_error(e)
 
 
 @app.post("/automation/windows")
-def create_automation_window(body: AutomationWindowRequest):
+def create_automation_window(body: AutomationWindowRequest, current_user: dict = Depends(get_current_user)):
     if body.end_date < body.start_date:
         raise HTTPException(status_code=400, detail="end_date must be >= start_date")
     if (body.end_date - body.start_date).days > _MAX_AUTOMATION_SPAN_DAYS:
@@ -692,6 +743,7 @@ def create_automation_window(body: AutomationWindowRequest):
             start_time=body.start_time,
             end_time=body.end_time,
             days_of_week=body.days_of_week,
+            owner_id=current_user["user_id"],
         )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -701,9 +753,9 @@ def create_automation_window(body: AutomationWindowRequest):
 
 
 @app.delete("/automation/windows/{win_id}")
-def remove_automation_window(win_id: int):
+def remove_automation_window(win_id: int, current_user: dict = Depends(get_current_user)):
     try:
-        removed = delete_automation_window(win_id)
+        removed = delete_automation_window(win_id, owner_id=current_user["user_id"])
     except Exception as e:
         raise _db_error(e)
     if removed == 0:
@@ -712,14 +764,14 @@ def remove_automation_window(win_id: int):
 
 
 @app.post("/automation/evaluate")
-def evaluate_automation(body: AutomationEvaluateRequest):
+def evaluate_automation(body: AutomationEvaluateRequest, current_user: dict = Depends(get_current_user)):
     """
     Evaluate current conditions and determine what automation would do.
     Logs a decision to event_log and returns the action + reason.
     For show: does not control hardware, but accurately reflects what the
     ventilation pipeline would decide based on live sensor data.
     """
-    sensor = get_latest_sensor_reading()
+    sensor = get_latest_sensor_reading(owner_id=current_user["user_id"])
     if not sensor:
         raise HTTPException(status_code=404, detail="No sensor data available")
 

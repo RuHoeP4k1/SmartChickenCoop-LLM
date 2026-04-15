@@ -7,6 +7,9 @@ import os
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Hard error at import time if JWT_SECRET is missing — intentional fail-fast.
 SECRET_KEY = os.environ["JWT_SECRET"]
