@@ -11,6 +11,7 @@ Setup on the Pi: (Ruben will help you with this)
            DB_NAME=chickens
            DB_USER=postgres
            DB_PASSWORD=<your password>
+           SENSOR_OWNER_ID=1      ← ID of the user this Pi belongs to
     3. Import send_reading() in your sensor script and call it.
 
 Expected field values (you decide what's normal/warning/critical):
@@ -26,8 +27,16 @@ Expected field values (you decide what's normal/warning/critical):
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import time
 from backend.db_utils import insert_sensor_reading, get_db_connection, release_db_connection
+
+# Which user does this Pi belong to?
+# Set SENSOR_OWNER_ID in the .env file on the Pi.
+# Readings without an owner_id will still be stored but won't appear in any user's dashboard.
+_OWNER_ID: int | None = int(os.getenv("SENSOR_OWNER_ID")) if os.getenv("SENSOR_OWNER_ID") else None
 
 # You can modify this function to adjust for the format of your sensor readings.
 # Remind more functions will have to be refactored if you change the expected field names or types.
@@ -55,6 +64,7 @@ def send_reading(
         "heat_stress_index": heat_stress_index,
         "feeder_status": feeder_status,
         "waterer_status": waterer_status,
+        "owner_id": _OWNER_ID,
     }
 
     row_id = insert_sensor_reading(reading)
@@ -117,14 +127,16 @@ def run_loop(interval_seconds: int = 120):
 if __name__ == "__main__":
     print("Pi Sensor Writer — Connection Test")
     print("=" * 40)
+    print(f"SENSOR_OWNER_ID: {_OWNER_ID if _OWNER_ID is not None else '(not set — readings will be unowned)'}")
 
     if not test_connection():
         print("\nCheck your .env or environment variables:")
-        print("  DB_HOST  = IP address of the desktop running PostgreSQL")
-        print("  DB_PORT  = 5432 (default)")
-        print("  DB_NAME  = chickens")
-        print("  DB_USER  = postgres")
-        print("  DB_PASSWORD = <your password>")
+        print("  DB_HOST         = IP address of the desktop running PostgreSQL")
+        print("  DB_PORT         = 5432 (default)")
+        print("  DB_NAME         = chickens")
+        print("  DB_USER         = postgres")
+        print("  DB_PASSWORD     = <your password>")
+        print("  SENSOR_OWNER_ID = <user id from the users table>")
         exit(1)
 
     print("Connection OK!\n")
