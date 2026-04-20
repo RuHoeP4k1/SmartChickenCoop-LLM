@@ -1,7 +1,7 @@
 # Evaluation Pipeline Overview
 
 <!-- AUTO-GENERATED -->
-## Current Status (as of 2026-04-01)
+## Current Status (as of 2026-04-19)
 
 | Phase | Component | Status | Output |
 |-------|-----------|--------|--------|
@@ -12,6 +12,7 @@
 | Phase 2 — Human pairwise ranking | `ranking_app/` (37 raters, 644 votes) | **Complete** | Supabase `rankings` table |
 | Phase 2 — Sensor routing comparison | `compare_sensor_routing.py` (19 scenarios × 3 runs) | **Complete** | `results/sensor_routing_comparison.json` |
 | Phase 2 — Sensor awareness end-to-end | `evaluate_sensor_awareness.py` (19 scenarios) | **Complete** | `results/sensor_awareness_results.json` |
+| Appendix — RAG vs no-RAG ablation | `evaluate_rag_ablation.py` + `rag_ablation_mixed_model.py` (2 conditions × 45 synthetic goldens) | **Complete** | `results/rag_ablation_results.json`, `results/rag_ablation_mixed_model.md` |
 
 ### Phase 1 — Winner Configuration
 
@@ -26,6 +27,22 @@ LLM model is the only statistically significant factor (ANOVA F=34.85, p<0.0001)
 **Sensor routing winner: LLM classifier** — 19/19 (100%) accuracy vs keyword filter's 18/19 (94.7%). Cost: ~$0.00009/call. Now production default (`SENSOR_ROUTING_MODE=llm`). Keyword filter fails on S13 (H₂S critical + encyclopedic question) due to rigid rule priority ordering.
 
 **Sensor awareness pass rate:** 16/19 (84.2%). Three failure modes: over-hedging on normal readings (S03), urgency miscalibration on encyclopedic questions (S11), H₂S critical overriding encyclopedic exclusion rule (S13 — now fixed by LLM routing).
+
+### Appendix — RAG vs no-RAG Ablation Results
+
+**Metric stack** (refactored): AnswerRelevancyMetric + FaithfulnessMetric + ContextualRecallMetric (DeepEval built-ins) + Actionability + Correctness (custom G-Eval). Judge: `gpt-4o-mini`. Test set: 45 synthetic goldens from `test_docs/` (DeepEval Synthesizer, gpt-4o-mini, 5 evolution types).
+
+**Shared metrics (LME, Holm-corrected):**
+
+| Metric | no_rag | rag | Δ | Holm p |
+|--------|--------|-----|---|--------|
+| Answer Relevancy | 0.795 | 0.827 | +0.032 | 1.000 |
+| Actionability | 0.927 | 0.933 | +0.007 | 1.000 |
+| Correctness | 0.582 | 0.602 | +0.020 | 0.367 |
+
+**RAG-only diagnostics:** Faithfulness = 0.961 (SD=0.058), Contextual Recall = 0.945 (SD=0.187).
+
+**Interpretation:** RAG shows small positive Δ across all metrics but none reach significance. The retriever quality is excellent (faithfulness ~0.96), but the base LLM already has sufficient parametric knowledge for common poultry husbandry Q&A. Two systematically hard questions flagged by BLUPs (Q26: flock size, Q27: laying age); robustness re-run confirms main results hold after dropping them.
 <!-- END AUTO-GENERATED -->
 
 ---
@@ -34,56 +51,65 @@ LLM model is the only statistically significant factor (ANOVA F=34.85, p<0.0001)
 
 | Script | Phase | Purpose | Metrics | Judge | When to Run |
 |--------|-------|---------|---------|-------|-------------|
-| `evaluate_rag.py` | 1 | RAG vs no-RAG (fast heuristic) | Topic coverage, length, actionability (keyword) | None (no API) | Quick baseline, zero cost |
-| `evaluate_retrieval.py` | 1 | Hybrid vs semantic retrieval | Heuristic + RAGAS ContextPrecision + latency | Claude Haiku | Before sweep (retrieval method comparison) |
-| `evaluate_ragas.py` | 1 | RAG vs no-RAG (semantic) | Faithfulness, Answer Relevancy, Context Precision, Context Recall | Claude Haiku | Standalone RAG quality check |
-| `evaluate_deepeval.py` | 1 | RAG vs no-RAG (custom + standard) | Actionability, Correctness (GEval) + Faithfulness, Answer Relevancy | Claude Haiku | After sweep winner is known |
-| `sweep.py` | 1 | Hyperparameter sweep (full factorial) | All 7 metrics below | Llama 3.3 70B (OpenRouter) | Round 1 experiment |
+| `sweep.py` | 1 | Hyperparameter sweep (full factorial) | Actionability, Correctness, Faithfulness, Answer Relevancy, Contextual Recall | OpenRouter (via `SWEEP_JUDGE_MODEL`) | Round 1 experiment |
 | `sweep_analysis.py` | 1 | Statistical analysis of sweep results | ANOVA, main effects, interactions, composite | N/A (post-processing) | After sweep completes |
 | `sweep_mixed_model.py` | 1 | Linear mixed effects analysis | Fixed effects + BLUPs per question | N/A (post-processing) | After sweep completes |
-| `evaluate_prompt_variants.py` | 2 | Prompt variant scoring + pair export | Actionability, Correctness (GEval) | Kimi 2.6 (OpenRouter) | After sweep winner config is set |
+| `evaluate_prompt_variants.py` | 2 | Prompt variant scoring + pair export | Actionability, Correctness (G-Eval) | OpenRouter (via `SWEEP_JUDGE_MODEL`) | After sweep winner config is set |
 | `prompt_variant_mixed_model.py` | 2 | Mixed effects analysis of prompt variants | Fixed effects + pairwise contrasts + BLUPs | N/A (post-processing) | After prompt variant scoring |
-| `compare_sensor_routing.py` | 2 | Keyword vs LLM routing comparison | Accuracy, latency, cost per call | N/A (direct comparison) | After sensor_filter.py changes |
+| `compare_sensor_routing.py` | 2 | Keyword vs LLM routing comparison | Accuracy, latency, cost per call | N/A (direct comparison) | After `sensor_filter.py` changes |
 | `evaluate_sensor_awareness.py` | 2 | Sensor awareness end-to-end (19 scenarios) | Routing, value citation, urgency, hallucination | N/A (rule-based checks) | After sensor pipeline changes |
-| `run_eval.py` | — | Orchestrator — runs all evaluate_*.py scripts | All of the above | Mixed | Full evaluation run |
+| `evaluate_rag_ablation.py` | Appendix | RAG vs no-RAG (2 conditions, 45 synthetic goldens, max_tokens=1000) | Answer Relevancy, Actionability, Correctness (shared); Faithfulness, Contextual Recall (rag-only) | OpenRouter (via `SWEEP_JUDGE_MODEL`, gpt-4o-mini) | Paper appendix — isolates retrieval contribution |
+| `rag_ablation_mixed_model.py` | Appendix | LME for ablation (score ~ condition + (1|q_num)) | Fixed-effect Δ, Wald p, Holm-adjusted, BLUPs | N/A (post-processing) | After `evaluate_rag_ablation.py` |
+
+## Judge Model — Per-Experiment Record
+
+> **Methodological note:** Different LLM judges were used across evaluation phases. Judge calibration, strictness, and JSON compliance differ between models. **Do not compare raw metric means across phases** — comparisons are only valid within a single script run (e.g. `no_rag` vs `rag` within the ablation, or prompt variants against each other within Phase 2).
+
+| Phase / Script | Judge Model | Notes |
+|----------------|-------------|-------|
+| Phase 1 — `sweep.py` | `meta-llama/llama-3.3-70b-instruct` via OpenRouter | SWEEP_JUDGE_MODEL at time of run |
+| Phase 2 — `evaluate_prompt_variants.py` | `moonshotai/kimi-k2` (Kimi 2.6) via OpenRouter | SWEEP_JUDGE_MODEL at time of run |
+| Phase 2 — Human ranking | Human raters (37 raters, 644 votes) | No LLM judge |
+| Phase 2 — Sensor awareness | Rule-based checks | No LLM judge |
+| Appendix — `evaluate_rag_ablation.py` | `openai/gpt-4o-mini` via OpenRouter | Switched from minimax/minimax-m2.7 which failed DeepEval's built-in metric JSON schema |
 
 ## Metrics — What Each One Measures
 
 | Metric | Type | Scale | What It Measures | Failure Mode It Catches |
 |--------|------|-------|-----------------|------------------------|
-| **Actionability** | Custom GEval | 0–1 | Does the keeper know what to do after reading? | Vague, hedged, or filler answers |
-| **Correctness** | Custom GEval | 0–1 | Is the advice factually accurate and safe? | Wrong temps, dangerous meds, bad feeding info |
-| **Faithfulness** | Standard (DeepEval) | 0–1 | Is the answer grounded in retrieved context? | Hallucination — model invents facts not in docs |
-| **Answer Relevancy** | Standard (DeepEval) | 0–1 | Does the answer address the actual question? | Off-topic or tangential responses |
-| **Contextual Precision** | Standard (DeepEval) | 0–1 | Are relevant chunks ranked above irrelevant ones? | Retriever returns noise at top positions |
-| **Contextual Recall** | Standard (DeepEval) | 0–1 | Does retrieved context contain needed information? | Missing chunks — answer can't be derived from context |
-| **Contextual Relevancy** | Standard (DeepEval) | 0–1 | Are retrieved chunks actually relevant to the query? | Retriever returns too many unrelated chunks |
+| **Actionability** | Custom G-Eval | 0–1 | Does the keeper know what to do after reading? | Vague, hedged, or filler answers |
+| **Correctness** | Custom G-Eval | 0–1 | Is the advice factually accurate and safe? | Wrong temps, dangerous meds, bad feeding info |
+| **Faithfulness** | Standard DeepEval built-in (sweep + ablation) | 0–1 | Is the answer grounded in retrieved context? | Hallucination — model invents facts not in docs |
+| **Answer Relevancy** | Standard DeepEval built-in (sweep + ablation) | 0–1 | Does the answer address the actual question? | Off-topic or tangential responses |
+| **Contextual Recall** | Standard DeepEval built-in (sweep + ablation) | 0–1 | Does retrieved context contain needed information? | Missing chunks — answer can't be derived from context |
 
 ## GEval Rubric Mapping
 
-The custom GEval metrics (Actionability, Correctness) use a 3-tier rubric on the 0–10 scale:
+**Scale ownership.** Rubric objects (`Rubric(score_range=...)`) in each script define the numeric scoring scale. Criteria text in `eval_config.py` describes the qualitative tiers only — it intentionally does not reference numeric scores. DeepEval normalizes: `final_score = raw_score / 10` (so 0.0–1.0).
 
-| Score Range | Level | Meaning |
-|-------------|-------|---------|
-| 0–3 | Bad | Not actionable / Incorrect or harmful |
-| 4–6 | Mediocre | Somewhat useful but gaps / Mostly correct but weaknesses |
-| 7–10 | Good | Genuinely helpful / Correct and appropriate |
+**Per-script rubrics** (raw 0–10 scale):
 
-DeepEval normalizes: `final_score = raw_score / 10` (so 0.0–1.0).
+| Script | Rubric shape | Tiers |
+|---|---|---|
+| `sweep.py` (Actionability, Correctness) | 3-tier | `0–3` Bad · `4–6` Mediocre · `7–10` Good |
+| `evaluate_prompt_variants.py` (Actionability, Correctness) | 4-tier | `0–3` Bad · `4–5` Partial · `6–7` Good · `8–10` Fully good |
+| `evaluate_rag_ablation.py` (Actionability, Correctness) | 4-tier | `0–3` Bad · `4–5` Partial · `6–7` Good · `8–10` Fully good |
 
-Criteria text is in `eval_config.py`. Rubric objects are in `sweep.py` and `evaluate_deepeval.py`.
+Because rubric shapes differ across scripts, do not compare raw means across scripts — compare within a script (e.g. `no_rag` vs `rag` in the ablation, or prompt variants against each other).
+
+**Files:**
+- Criteria text — `eval_config.py` (`ACTIONABILITY_CRITERIA`, `CORRECTNESS_CRITERIA`).
+- Rubric objects — `sweep.py:486-493`, `evaluate_prompt_variants.py:97-108`, `evaluate_rag_ablation.py` (GEval rubrics).
 
 ## Required LLMTestCase Fields Per Metric
 
 | Metric | input | actual_output | expected_output | retrieval_context |
 |--------|:-----:|:-------------:|:---------------:|:-----------------:|
-| Actionability (GEval) | x | x | | |
-| Correctness (GEval) | x | x | | |
+| Actionability (G-Eval) | x | x | | |
+| Correctness (G-Eval) | x | x | x | |
 | Faithfulness | x | x | | x |
 | Answer Relevancy | x | x | | |
-| Contextual Precision | x | | x | x |
 | Contextual Recall | x | | x | x |
-| Contextual Relevancy | x | | | x |
 
 ## Score Handling
 

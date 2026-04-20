@@ -11,12 +11,14 @@ __pycache__/
 *.pyo
 
 # Vector databases
-# chroma_db/ — committed to repo so Render can use it without Ollama
+# chroma_db/ — committed so Render can use it without Ollama re-embed on first deploy
 chroma_db_sweep/
 
-# Evaluation output
-evaluation/results/
-evaluation_results.json
+# Evaluation — raw data/outputs (large, generated, not for paper)
+evaluation/results/*.csv
+evaluation/results/*.json
+evaluation/results/plots/
+# evaluation/results/reports/ is NOT ignored — markdown reports tracked for paper writing
 
 # Frontend dependencies & build output
 frontend/node_modules/
@@ -24,17 +26,20 @@ frontend/dist/
 
 # Claude Code settings (local only)
 .claude/
-.agents/skills/
+.agents/
 skills-lock.json
 CLAUDE.md
+
+# Runtime state files (machine-specific, regenerated on every run)
+*_state.json
+
+# Debug / scratch plots
+scripts/*.png
+
 # Sensor team code (contains hardcoded credentials)
 MONITORING/
 
-# Local analysis notes (not for repo)
-mixed_model_analysis.md
-round1_analysis.md
-
-# Ranking app (standalone, not part of main repo)
+# Ranking app (standalone Supabase app, not part of main repo)
 ranking_app/
 
 # Logs
@@ -43,4 +48,6 @@ ranking_app/
 # OS
 .DS_Store
 Thumbs.db
+
+# Misc local scripts not for repo
 reembed.py

@@ -1,4 +1,4 @@
-# evaluation/plot_results.py
+# evaluation/shared/plot_results.py
 """
 Generate presentation-ready plots from RAG sweep CSV results.
 
@@ -9,8 +9,8 @@ Outputs (saved to evaluation/results/plots/):
   4. fig4_top5_table.png        — top-5 configs by overall weighted score
 
 Usage:
-    python evaluation/plot_results.py
-    python evaluation/plot_results.py --input evaluation/results/sweep_XXX.csv
+    python evaluation/shared/plot_results.py
+    python evaluation/shared/plot_results.py --input evaluation/results/sweep_XXX.csv
 """
 
 import os
@@ -23,8 +23,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(_HERE, "results")
+_HERE = os.path.dirname(os.path.abspath(__file__))   # evaluation/shared/
+_EVAL = os.path.dirname(_HERE)                       # evaluation/
+_ROOT = os.path.dirname(_EVAL)                       # ChickenLLM/
+
+RESULTS_DIR = os.path.join(_EVAL, "results")
 PLOTS_DIR   = os.path.join(RESULTS_DIR, "plots")
 
 # ---------------------------------------------------------------------------

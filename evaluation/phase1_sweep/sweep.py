@@ -1,4 +1,4 @@
-# evaluation/sweep.py
+# evaluation/phase1_sweep/sweep.py
 """
 RAG hyperparameter sweep — D-Optimal design runner.
 
@@ -7,10 +7,10 @@ DeepEval G-Eval (actionability + correctness), and saves results with
 full checkpoint/resume support.
 
 Usage:
-    python evaluation/sweep.py                    # full sweep (18 runs, main effects)
-    python evaluation/sweep.py --dry-run          # print design table only
-    python evaluation/sweep.py --n-questions 3    # smoke test (3 questions per config)
-    python evaluation/sweep.py --n-runs 6         # smoke test (6 configs only)
+    python evaluation/phase1_sweep/sweep.py                    # full sweep (18 runs, main effects)
+    python evaluation/phase1_sweep/sweep.py --dry-run          # print design table only
+    python evaluation/phase1_sweep/sweep.py --n-questions 3    # smoke test (3 questions per config)
+    python evaluation/phase1_sweep/sweep.py --n-runs 6         # smoke test (6 configs only)
 
 Prerequisites:
     pip install pyDOE3 langchain-openai deepeval langchain-anthropic
@@ -30,10 +30,13 @@ from pathlib import Path
 
 os.environ["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__))   # evaluation/phase1_sweep/
+_EVAL = os.path.dirname(_HERE)                        # evaluation/
+_ROOT = os.path.dirname(_EVAL)                        # ChickenLLM/
 sys.path.insert(0, _ROOT)
+sys.path.insert(0, _EVAL)
 sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_EVAL, "shared"))
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
@@ -71,7 +74,7 @@ from sweep_config import (
 # Paths
 # ---------------------------------------------------------------------------
 KB_PATH     = os.path.join(_ROOT, "test_docs")
-RESULTS_DIR = os.path.join(_HERE, "results")
+RESULTS_DIR = os.path.join(_EVAL, "results")
 TIMESTAMP   = datetime.now().strftime("%Y%m%d_%H%M%S")
 RESULTS_FILE     = os.path.join(RESULTS_DIR, f"sweep_{TIMESTAMP}.json")
 RESULTS_CSV      = os.path.join(RESULTS_DIR, f"sweep_{TIMESTAMP}.csv")

@@ -293,7 +293,7 @@ def rate_pairs(
 # =============================================================================
 
 if __name__ == "__main__":
-    RESULTS_DIR = os.path.join(_HERE, "results")
+    RESULTS_DIR = os.path.join(_EVAL, "results")
     DEFAULT_PAIRS  = os.path.join(RESULTS_DIR, "prompt_pairs.json")
     DEFAULT_OUTPUT = os.path.join(RESULTS_DIR, "human_rankings.json")
 

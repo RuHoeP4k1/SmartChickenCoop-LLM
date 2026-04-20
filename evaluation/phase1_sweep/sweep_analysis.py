@@ -24,13 +24,14 @@ from pathlib import Path
 from collections import defaultdict
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
-sys.path.insert(0, _HERE)
+_EVAL = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(_EVAL)
+sys.path.insert(0, _EVAL)
 
 from sweep_config import FACTOR_KEYS, PARAM_GRID, FACTOR_LABELS
 
-RESULTS_DIR = os.path.join(_HERE, "results")
-REPORT_PATH = os.path.join(RESULTS_DIR, "round1_analysis.md")
+RESULTS_DIR = os.path.join(_EVAL, "results")
+REPORT_PATH = os.path.join(RESULTS_DIR, "reports", "round1_analysis.md")
 
 
 # ---------------------------------------------------------------------------

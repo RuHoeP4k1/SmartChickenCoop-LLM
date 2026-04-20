@@ -36,9 +36,10 @@ from typing import Dict, List
 os.environ["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_EVAL = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(_EVAL)
 sys.path.insert(0, _ROOT)
-sys.path.insert(0, _HERE)
+sys.path.insert(0, _EVAL)
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_ROOT, ".env"))
@@ -302,7 +303,7 @@ def run_evaluation(
 
     KB_PATH    = os.path.join(_ROOT, "test_docs")
     CHROMA_DIR = os.path.join(_ROOT, "chroma_db")
-    RESULTS_DIR = os.path.join(_HERE, "results")
+    RESULTS_DIR = os.path.join(_EVAL, "results")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     print("=" * 80)

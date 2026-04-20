@@ -29,11 +29,12 @@ import numpy as np
 import pandas as pd
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
-sys.path.insert(0, _HERE)
+_EVAL = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(_EVAL)
+sys.path.insert(0, _EVAL)
 
-RESULTS_DIR  = os.path.join(_HERE, "results")
-REPORT_PATH  = os.path.join(RESULTS_DIR, "prompt_variant_mixed_model.md")
+RESULTS_DIR  = os.path.join(_EVAL, "results")
+REPORT_PATH  = os.path.join(RESULTS_DIR, "reports", "prompt_variant_mixed_model.md")
 REF_VARIANT  = "baseline"
 BAD_Q_SD_THRESHOLD = 1.5
 METRICS = ["actionability", "correctness", "combined"]

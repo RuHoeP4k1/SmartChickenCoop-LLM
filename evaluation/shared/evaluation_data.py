@@ -1,4 +1,4 @@
-# evaluation/evaluation_data.py
+# evaluation/shared/evaluation_data.py
 """
 Shared evaluation data for all evaluation scripts in this folder.
 

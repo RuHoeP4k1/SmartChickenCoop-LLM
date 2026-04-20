@@ -1,4 +1,4 @@
-# evaluation/sweep_config.py
+# evaluation/phase1_sweep/sweep_config.py
 """
 Experiment design for RAG hyperparameter sweep.
 
@@ -186,7 +186,10 @@ def chroma_dir(cfg: dict, base: str = None) -> str:
     Always uses nomic embedding — only chunk_size varies between dirs.
     Reuses the production chroma_db for chunk=800 (already embedded).
     """
-    root = os.path.dirname(os.path.dirname(__file__))
+    # This file lives in evaluation/phase1_sweep/, so root is two levels up
+    here = os.path.dirname(os.path.abspath(__file__))   # evaluation/phase1_sweep/
+    eval_dir = os.path.dirname(here)                    # evaluation/
+    root = os.path.dirname(eval_dir)                    # ChickenLLM/
     chunk = cfg["chunk_size"]
     if chunk == 800:
         return os.path.join(root, "chroma_db")
