@@ -10,13 +10,13 @@ import { getHistory } from '../api'
 // ---------------------------------------------------------------------------
 const METRICS = [
   { key: 'temperature_c',      label: 'Temperature', unit: '°C',   color: '#f97316', domain: ['auto', 'auto'], decimals: 1 },
-  { key: 'humidity_pct',       label: 'Humidity',    unit: '%',    color: '#0891b2', domain: [0, 100],         decimals: 0 },
-  { key: 'feeder_pct',         label: 'Feeder',      unit: '%',    color: '#16a34a', domain: [0, 100],         decimals: 0 },
-  { key: 'waterer_pct',        label: 'Waterer',     unit: '%',    color: '#2563eb', domain: [0, 100],         decimals: 0 },
-  { key: 'h2s_ppm',            label: 'H₂S',         unit: 'ppm',  color: '#dc2626', domain: [0, 50],          decimals: 2 },
-  { key: 'co2_ppm',            label: 'CO₂',         unit: 'ppm',  color: '#b45309', domain: [0, 2000],        decimals: 0 },
-  { key: 'nh3_ppm',            label: 'NH₃',         unit: 'ppm',  color: '#6d28d9', domain: [0, 25],          decimals: 1 },
-  { key: 'mold_risk_score',    label: 'Mold Risk',   unit: '',     color: '#7c3aed', domain: [0, 100],         decimals: 1 },
+  { key: 'humidity_pct',       label: 'Humidity',    unit: '%',    color: '#0891b2', domain: [0, 100], decimals: 0 },
+  { key: 'feeder_pct',         label: 'Feeder',      unit: '%',    color: '#16a34a', domain: [0, 100], decimals: 0 },
+  { key: 'waterer_pct',        label: 'Waterer',     unit: '%',    color: '#2563eb', domain: [0, 100], decimals: 0 },
+  { key: 'h2s_ppm',            label: 'H₂S',         unit: 'ppm',  color: '#dc2626', domain: ['auto', 'auto'], decimals: 2 },
+  { key: 'co2_ppm',            label: 'CO₂',         unit: 'ppm',  color: '#b45309', domain: ['auto', 'auto'], decimals: 0 },
+  { key: 'nh3_ppm',            label: 'NH₃',         unit: 'ppm',  color: '#6d28d9', domain: ['auto', 'auto'], decimals: 1 },
+  { key: 'mold_risk_score',    label: 'Mold Risk',   unit: '',     color: '#7c3aed', domain: [0, 100], decimals: 1 },
 ]
 
 const RANGES = [
