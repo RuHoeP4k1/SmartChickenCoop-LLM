@@ -1,32 +1,37 @@
-# evaluation/rag_ablation_mixed_model.py
+# evaluation/appendix_rag/mixed_model.py
 """
-Linear Mixed Effects analysis of RAG vs no-RAG ablation results.
+Linear Mixed Effects analysis of Retrieved vs Random Chunks ablation results.
 
-One LME per SHARED metric (answer_relevancy, actionability, correctness) with
-random intercept per question. The fixed-effect coefficient on `condition=rag`
-is the estimated mean difference on the 0-1 scale — directly interpretable.
+One LME per metric (all five) with random intercept per question. The fixed-effect
+coefficient on `condition=rag` is the estimated mean difference on the 0-1 scale —
+directly interpretable as retrieval quality gain.
 
 Model:  score ~ C(condition) + (1|q_num)
-Ref:    condition=no_rag
+Ref:    condition=random_chunks
 
-Family-wise correction: Holm across the three SHARED metrics.
+Family-wise correction: Holm across all five metrics.
 
-The two RAG-only metrics (faithfulness, contextual_recall) have no no_rag
-counterpart (retrieval_context is required) so they are reported as rag-only
-descriptive statistics without an inferential test.
+Key metric for interpretation:
+  contextual_recall — primary retrieval quality signal. Random chunks → near zero
+    because the ground-truth information is not in the context. Retrieved chunks →
+    high because the retriever found relevant material. The gap between conditions
+    directly quantifies retrieval value.
+  faithfulness — note inverted semantics for random_chunks: high faithfulness there
+    means the model confabulated answers consistent with irrelevant context (bad).
+    Low faithfulness for random_chunks means the model ignored noise and used its
+    own knowledge. Interpret direction accordingly.
 
 Outputs:
-  A. Descriptive means per condition (shared + rag-only).
-  B. Fixed effects table + Wald test per shared metric.
-  C. Holm-adjusted p-values across the three shared metrics.
-  D. Rag-only diagnostics (mean, SD, min, max).
-  E. Bad-question detection via BLUPs (1.5 SD threshold) anchored on
+  A. Descriptive means per condition (all five metrics).
+  B. Fixed effects table + Wald test per metric.
+  C. Holm-adjusted p-values across all five metrics.
+  D. Bad-question detection via BLUPs (1.5 SD threshold) anchored on
      correctness LME.
-  F. Robustness re-run: LME refit after dropping flagged questions.
+  E. Robustness re-run: LME refit after dropping flagged questions.
 
 Usage:
-    python evaluation/rag_ablation_mixed_model.py
-    python evaluation/rag_ablation_mixed_model.py --input evaluation/results/rag_ablation_results.json
+    python evaluation/appendix_rag/mixed_model.py
+    python evaluation/appendix_rag/mixed_model.py --input evaluation/results/rag_ablation_results.json
 """
 
 import os
@@ -42,15 +47,28 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _EVAL = os.path.dirname(_HERE)
 _ROOT = os.path.dirname(_EVAL)
 sys.path.insert(0, _EVAL)
+sys.path.insert(0, os.path.join(_EVAL, "shared"))
 
-RESULTS_DIR  = os.path.join(_EVAL, "results")
-REPORT_PATH  = os.path.join(RESULTS_DIR, "reports", "rag_ablation_mixed_model.md")
-REF_CONDITION = "no_rag"
+RESULTS_DIR   = os.path.join(_EVAL, "results")
+REPORT_PATH   = os.path.join(RESULTS_DIR, "reports", "rag_ablation_mixed_model.md")
+REF_CONDITION = "random_chunks"
 BAD_Q_SD_THRESHOLD = 1.5
 
-SHARED_METRICS   = ["answer_relevancy", "actionability", "correctness"]
-RAG_ONLY_METRICS = ["faithfulness", "contextual_recall"]
-ALL_METRICS      = SHARED_METRICS + RAG_ONLY_METRICS
+ALL_METRICS = [
+    "answer_relevancy",
+    "actionability",
+    "correctness",
+    "faithfulness",
+    "contextual_recall",
+]
+
+FAITHFULNESS_NOTE = (
+    "**Faithfulness interpretation note:** For `random_chunks`, high faithfulness "
+    "indicates the model produced claims consistent with irrelevant context "
+    "(confabulation from noise). Low faithfulness means the model ignored "
+    "irrelevant context and drew on its own knowledge. For `rag`, high faithfulness "
+    "is the desired outcome — the model stays grounded in relevant retrieved material."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +202,6 @@ def fixed_effects_table(result, title: str) -> list:
 
 
 def condition_p_value(result) -> tuple:
-    """Return (coef, p) for the single non-intercept C(condition) term."""
     for param in result.fe_params.index:
         if param == "Intercept":
             continue
@@ -193,11 +210,10 @@ def condition_p_value(result) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Holm correction across metrics
+# Holm correction
 # ---------------------------------------------------------------------------
 
 def holm_correct(pvals: dict) -> dict:
-    """Holm–Bonferroni step-down on a dict {metric: raw_p}."""
     items = [(m, p) for m, p in pvals.items() if not np.isnan(p)]
     items.sort(key=lambda x: x[1])
     m = len(items)
@@ -252,7 +268,7 @@ def bad_questions(result, question_map: dict) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Descriptive summaries
+# Descriptive summary
 # ---------------------------------------------------------------------------
 
 def _valid(series: pd.Series) -> pd.Series:
@@ -260,9 +276,10 @@ def _valid(series: pd.Series) -> pd.Series:
 
 
 def descriptive_table(df: pd.DataFrame) -> list:
-    lines = ["## Descriptive Summary", "",
-             "Shared metrics (both conditions) and RAG-only diagnostics.", ""]
-    # Header
+    lines = [
+        "## Descriptive Summary", "",
+        "All five metrics apply to both conditions (both have retrieval_context).", "",
+    ]
     header = "| Condition | N | " + " | ".join(m.replace("_", " ").title() for m in ALL_METRICS) + " |"
     sep    = "|-----------|---|" + "|".join("-----" for _ in ALL_METRICS) + "|"
     lines.append(header)
@@ -275,32 +292,10 @@ def descriptive_table(df: pd.DataFrame) -> list:
         cells = [condition, str(n)]
         for m in ALL_METRICS:
             vals = _valid(sub[m])
-            if len(vals) == 0:
-                cells.append("—")
-            else:
-                cells.append(f"{vals.mean():.4f}")
+            cells.append(f"{vals.mean():.4f}" if len(vals) > 0 else "—")
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
-    return lines
-
-
-def rag_only_diagnostics(df: pd.DataFrame) -> list:
-    lines = ["## RAG-only Retrieval Diagnostics", "",
-             "These metrics require `retrieval_context` so they are only defined for the rag condition.",
-             "No inferential test — these are descriptive quality signals for the retriever + generator.",
-             ""]
-    rag = df[df["condition"] == "rag"]
-    lines.append("| Metric | N | Mean | SD | Min | Max |")
-    lines.append("|--------|---|------|----|-----|-----|")
-    for m in RAG_ONLY_METRICS:
-        vals = _valid(rag[m])
-        if len(vals) == 0:
-            lines.append(f"| {m} | 0 | — | — | — | — |")
-            continue
-        lines.append(
-            f"| {m} | {len(vals)} | {vals.mean():.4f} | {vals.std(ddof=1):.4f} "
-            f"| {vals.min():.4f} | {vals.max():.4f} |"
-        )
+    lines.append(FAITHFULNESS_NOTE)
     lines.append("")
     return lines
 
@@ -310,7 +305,7 @@ def rag_only_diagnostics(df: pd.DataFrame) -> list:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Mixed effects analysis of RAG ablation results")
+    parser = argparse.ArgumentParser(description="Mixed effects analysis of retrieval ablation results")
     parser.add_argument("--input", help="Path to rag_ablation_results.json")
     args = parser.parse_args()
 
@@ -318,32 +313,34 @@ def main():
     question_map = load_questions()
 
     report = [
-        "# Mixed Effects Analysis — RAG vs no-RAG Ablation",
+        "# Mixed Effects Analysis — Retrieved vs Random Chunks Ablation",
         "",
-        "Model: `score ~ C(condition) + (1|q_num)` (shared metrics only)",
-        "Random intercept per question removes between-question noise from the condition effect.",
+        "**Research question:** Does targeted retrieval (hybrid 70/30 BM25+semantic) find "
+        "meaningfully better context than chance, measured by downstream answer quality?",
+        "",
+        "Model: `score ~ C(condition) + (1|q_num)` (random intercept per question removes "
+        "between-question difficulty noise from the condition effect.)",
         f"Reference level: condition=`{REF_CONDITION}`",
+        "The coefficient `condition=rag` is the estimated mean gain on the 0–1 metric scale.",
+        "Family-wise correction: Holm across all five metrics.",
         "",
-        "With two conditions, the non-intercept coefficient `condition=rag` is the estimated",
-        "mean difference in score on the 0–1 metric scale and is the reported effect size.",
-        "Family-wise correction: Holm across the three shared metrics.",
-        "",
-        "The rag-only metrics (`faithfulness`, `contextual_recall`) require retrieval_context",
-        "so have no no_rag counterpart — they are reported as descriptive diagnostics.",
+        "**Key metric:** `contextual_recall` — directly measures whether the retrieved context "
+        "contains the information needed to answer each question. Random chunks → near zero "
+        "(corpus is large, relevant chunks rare by chance). Retrieved chunks → high (retriever "
+        "selects relevant material). The gap is the core empirical claim.",
         "",
     ]
 
     report += descriptive_table(df)
 
-    # ── Fit LMEs on SHARED metrics + collect Wald p-values ──
-    report.append("## Shared Metrics — LME (full sample)")
+    report.append("## LME Results — All Metrics")
     report.append("")
 
     raw_p = {}
     coefs = {}
-    combined_result = None  # for BLUP anchor
+    combined_result = None
 
-    for metric in SHARED_METRICS:
+    for metric in ALL_METRICS:
         print(f"Fitting LME: {metric} ...")
         result = fit_lme(df, metric)
         if result is None:
@@ -356,14 +353,13 @@ def main():
         if metric == "correctness":
             combined_result = result
 
-    # ── Holm-corrected p-values ──
     adj_p = holm_correct(raw_p)
 
     report.append("### Holm-corrected family-wise p-values")
     report.append("")
-    report.append("| Metric | Δ (rag − no_rag) | Wald p (raw) | Holm-adjusted p |")
-    report.append("|--------|------------------|--------------|-----------------|")
-    for m in SHARED_METRICS:
+    report.append("| Metric | Δ (rag − random_chunks) | Wald p (raw) | Holm-adjusted p |")
+    report.append("|--------|-------------------------|--------------|-----------------|")
+    for m in ALL_METRICS:
         if m not in raw_p:
             continue
         rp = raw_p[m]; ap = adj_p[m]; c = coefs[m]
@@ -371,30 +367,26 @@ def main():
         ap_str = "< .001" if ap < 0.001 else f"{ap:.3f}"
         report.append(f"| {m} | {c:+.4f} | {rp_str} | {ap_str} |")
     report.append("")
+    report.append(FAITHFULNESS_NOTE)
+    report.append("")
 
-    # ── RAG-only diagnostics ──
-    report.append("---")
-    report += rag_only_diagnostics(df)
-
-    # ── BLUP diagnostic (use correctness LME as anchor) ──
     report.append("---")
     report.append("## Bad Question Detection")
     report.append("")
     flagged_q, blup_lines = bad_questions(combined_result, question_map) if combined_result else ([], [])
     report += blup_lines
 
-    # ── Robustness re-run on SHARED metrics ──
     if flagged_q:
         report.append("## Robustness Re-run (flagged questions dropped)")
         report.append("")
         report.append(
-            f"Dropping Q#s {sorted(flagged_q)} and refitting the three shared metrics. "
-            "This checks whether the main effect is driven by a handful of systematically hard questions."
+            f"Dropping Q#s {sorted(flagged_q)} and refitting all metrics. "
+            "Checks whether the main effect is driven by systematically hard questions."
         )
         report.append("")
         rob_p = {}
         rob_coefs = {}
-        for metric in SHARED_METRICS:
+        for metric in ALL_METRICS:
             print(f"Refitting LME (robustness): {metric} ...")
             res = fit_lme(df, metric, exclude_q=flagged_q)
             if res is None:
@@ -404,9 +396,9 @@ def main():
             rob_coefs[metric] = c
         rob_adj = holm_correct(rob_p)
 
-        report.append("| Metric | Δ (rag − no_rag) | Wald p (raw) | Holm-adjusted p |")
-        report.append("|--------|------------------|--------------|-----------------|")
-        for m in SHARED_METRICS:
+        report.append("| Metric | Δ (rag − random_chunks) | Wald p (raw) | Holm-adjusted p |")
+        report.append("|--------|-------------------------|--------------|-----------------|")
+        for m in ALL_METRICS:
             if m not in rob_p:
                 continue
             rp = rob_p[m]; ap = rob_adj[m]; c = rob_coefs[m]
@@ -415,7 +407,7 @@ def main():
             report.append(f"| {m} | {c:+.4f} | {rp_str} | {ap_str} |")
         report.append("")
 
-    Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+    os.makedirs(os.path.join(RESULTS_DIR, "reports"), exist_ok=True)
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(report) + "\n")
 

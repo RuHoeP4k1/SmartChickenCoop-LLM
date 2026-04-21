@@ -174,6 +174,23 @@ This explains why Axis 2 (sensor awareness) is a separate evaluation axis — th
 - Fallback: on LLM error, reverts to keyword routing (`should_include_sensors`)
 - Model configurable via `SENSOR_ROUTER_MODEL` env var (defaults to main LLM model)
 
+### Production prompt anatomy — what the hybrid actually inherits
+
+The resulting `STANDARD_PROMPT` in `backend/prompts.py` is a post-hoc synthesis of the three winning variants rather than a clean copy of any one. The table below maps each design decision back to its source:
+
+| Element | Production `STANDARD_PROMPT` | Source variant |
+|---|---|---|
+| Output skeleton | `**The short answer:** (1–2 sentences)` + `**Steps to take:**` | **structured** |
+| Informational escape hatch | "write a concise explanation instead of forcing action steps" | **structured** |
+| Vet restraint rule | "Only mention a vet for genuine emergencies — visible injury, suspected contagious disease, or a bird in acute distress" | **expert** (calibrated restraint, not a generic disclaimer) |
+| Persona framing | "friendly, knowledgeable assistant for hobby chicken keepers" | **baseline** (short form) |
+| Instruction density | Moderate — explicit safety rules but no deep domain-authority backstory | **concise** trimming applied to **baseline** foundation |
+| Sensor-specific guards | "never present reference knowledge as something you are currently observing"; `_SENSOR_ANCHOR` / `_SENSOR_PRIORITISE` dynamic injection | Production-only — not tested in any variant |
+
+**What was dropped in the merge:** The `expert` variant's domain-authority persona framing ("part researcher, part seasoned flock keeper… you know the difference between textbook advice and what actually works at 6 a.m.") was not carried over. This framing may have been responsible for expert's correctness advantage (0.757 vs structured's 0.743 G-Eval score). The current prompt gets the structural win from `structured` and the vet calibration from `expert`, but loses the confidence signal that the expert persona embedded in the model's output register.
+
+**Gap not closed by Phase 2 eval:** The sensor-specific guards (`_SENSOR_ANCHOR`, `_SENSOR_PRIORITISE`, the "never present reference knowledge as an observation" rule) were added after the variant tests and were never scored. Their effect on answer quality — particularly hallucination suppression when sensor context is injected — remains unmeasured.
+
 ---
 
 ## Axis 2 — Sensor / real-time awareness
@@ -217,9 +234,11 @@ Nineteen test scenarios cover these cases using mocked sensor snapshots (no Pi o
 
 | File | Purpose |
 |---|---|
-| `evaluate_prompt_variants.py` | DeepEval G-Eval scoring of 4 prompt variants + pairwise export |
-| `evaluate_sensor_awareness.py` | Sensor awareness scoring across 11 scenarios |
-| `human_ranking.py` | CLI pairwise ranking tool (ELO + win rates) |
+| `phase2_prompts/evaluate_variants.py` | DeepEval G-Eval scoring of 4 prompt variants + pairwise export |
+| `phase2_prompts/evaluate_sensor_awareness.py` | Sensor awareness scoring across 19 scenarios |
+| `phase2_prompts/human_ranking.py` | CLI pairwise ranking tool (ELO + win rates) |
+| `phase2_prompts/compare_sensor_routing.py` | Keyword vs LLM routing comparison (19 scenarios × 3 runs) |
+| `phase2_prompts/mixed_model.py` | Mixed effects analysis of prompt variant scores |
 
 ---
 
@@ -228,7 +247,7 @@ Nineteen test scenarios cover these cases using mocked sensor snapshots (no Pi o
 ### Step 1 — Run prompt variant evaluation
 
 ```bash
-python evaluation/evaluate_prompt_variants.py --export-pairs
+python evaluation/phase2_prompts/evaluate_variants.py --export-pairs
 ```
 
 This generates two files:
@@ -261,7 +280,7 @@ python ranking_app/analyze.py
 ### Step 3 — Sensor awareness evaluation
 
 ```bash
-python evaluation/evaluate_sensor_awareness.py
+python evaluation/phase2_prompts/evaluate_sensor_awareness.py
 ```
 
 Results are saved to `results/sensor_awareness_results.json`.
@@ -269,17 +288,17 @@ Results are saved to `results/sensor_awareness_results.json`.
 Use `--verbose` to see the full answer text for each scenario:
 
 ```bash
-python evaluation/evaluate_sensor_awareness.py --verbose
+python evaluation/phase2_prompts/evaluate_sensor_awareness.py --verbose
 ```
 
 ### Step 4 — Smoke tests (optional, before full runs)
 
 ```bash
 # Test only 5 questions for prompt variants
-python evaluation/evaluate_prompt_variants.py --n-questions 5
+python evaluation/phase2_prompts/evaluate_variants.py --n-questions 5
 
 # Test only 4 sensor scenarios
-python evaluation/evaluate_sensor_awareness.py --n-scenarios 4
+python evaluation/phase2_prompts/evaluate_sensor_awareness.py --n-scenarios 4
 ```
 
 ---
