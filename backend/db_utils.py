@@ -550,6 +550,10 @@ CREATE TABLE IF NOT EXISTS automation_windows (
 CREATE INDEX IF NOT EXISTS idx_automation_windows_range ON automation_windows(start_date, end_date);
 """
 
+MIGRATE_AUTOMATION_WINDOWS_SQL = """
+ALTER TABLE automation_windows ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+"""
+
 _DEFAULT_CHORES = [
     ("Cleaned coop",
      ["bedding", "waterer", "feeder", "nestbox"],
@@ -892,7 +896,7 @@ def get_automation_windows_in_range(start_date, end_date) -> List[Dict]:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
             """SELECT id, task, start_date, end_date, start_time, end_time,
-                      days_of_week, enabled, created_at
+                      days_of_week, enabled
                FROM automation_windows
                WHERE enabled = TRUE
                  AND start_date <= %s
@@ -1196,6 +1200,7 @@ def setup_database():
         cursor.execute(CREATE_CHORE_DEFINITIONS_SQL)
         cursor.execute(CREATE_CHORE_LOG_SQL)
         cursor.execute(CREATE_AUTOMATION_WINDOWS_SQL)
+        cursor.execute(MIGRATE_AUTOMATION_WINDOWS_SQL)
         cursor.execute(CREATE_DEVICE_CONTROL_SQL)
         _seed_default_chores(cursor)
         conn.commit()
