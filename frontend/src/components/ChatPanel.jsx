@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { askQuestion } from '../api'
+import { askQuestionStream } from '../api'
 
 /* ── Icons ───────────────────────────────────────────────────────── */
 function SendIcon({ className }) {
@@ -224,7 +224,8 @@ export default function ChatPanel() {
     },
   ])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false)   // true = show TypingIndicator
+  const [streaming, setStreaming] = useState(false) // true = input disabled during stream
   const [useSensors, setUseSensors] = useState(true)
   const [useTaskContext, setUseTaskContext] = useState(false)
   const bottomRef = useRef(null)
@@ -246,9 +247,8 @@ export default function ChatPanel() {
   async function submit(e) {
     e?.preventDefault()
     const query = input.trim()
-    if (!query || loading) return
+    if (!query || loading || streaming) return
 
-    // Replace welcome sentinel with a real conversation
     const prevMessages = isEmptyState ? [] : messages.slice(1)
     const history = prevMessages.map(m => ({ role: m.role, content: m.content }))
 
@@ -258,28 +258,52 @@ export default function ChatPanel() {
       return [...base, { role: 'user', content: query }]
     })
     setLoading(true)
+    setStreaming(true)
 
-    try {
-      const result = await askQuestion(query, history, useSensors, true, useTaskContext)
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: result.answer,
-          sources: result.sources,
-          chunks: result.chunks,
-          sensor_context: result.sensor_context,
-          has_critical: result.has_critical,
+    await askQuestionStream(
+      query, history, useSensors, true, useTaskContext,
+      {
+        onChunk(delta) {
+          setLoading(false) // hide TypingIndicator on first token
+          setMessages(prev => {
+            const last = prev[prev.length - 1]
+            if (last?.role === 'assistant' && last._streaming) {
+              return [...prev.slice(0, -1), { ...last, content: last.content + delta }]
+            }
+            return [...prev, { role: 'assistant', content: delta, _streaming: true }]
+          })
         },
-      ])
-    } catch (err) {
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: `Could not reach the backend: ${err.message}` },
-      ])
-    } finally {
-      setLoading(false)
-    }
+        onDone(frame) {
+          setLoading(false)
+          setStreaming(false)
+          setMessages(prev => {
+            const last = prev[prev.length - 1]
+            if (last?.role === 'assistant') {
+              return [
+                ...prev.slice(0, -1),
+                {
+                  role: 'assistant',
+                  content: last.content || frame.answer,
+                  sources: frame.sources,
+                  chunks: frame.chunks,
+                  sensor_context: frame.sensor_context,
+                  has_critical: frame.has_critical,
+                },
+              ]
+            }
+            return prev
+          })
+        },
+        onError(err) {
+          setLoading(false)
+          setStreaming(false)
+          setMessages(prev => [
+            ...prev,
+            { role: 'assistant', content: `Could not reach the backend: ${err.message}` },
+          ])
+        },
+      },
+    )
   }
 
   function handleKeyDown(e) {
@@ -289,7 +313,7 @@ export default function ChatPanel() {
     }
   }
 
-  const hasInput = input.trim().length > 0
+  const hasInput = input.trim().length > 0 && !streaming
 
   return (
     <div className="h-full flex flex-col bg-stone-50 dark:bg-stone-900">
@@ -343,13 +367,13 @@ export default function ChatPanel() {
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask about your flock…"
-              disabled={loading}
+              disabled={loading || streaming}
               className="flex-1 bg-transparent border-0 focus:outline-none focus:ring-0 text-sm text-stone-800 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 disabled:opacity-50 px-2"
             />
             <button
               type="button"
               onClick={submit}
-              disabled={loading || !hasInput}
+              disabled={loading || streaming || !hasInput}
               className={`p-2 rounded-lg transition-all duration-150 active:scale-95 shrink-0 ${
                 hasInput && !loading
                   ? 'bg-amber-600 hover:bg-amber-500 text-white'

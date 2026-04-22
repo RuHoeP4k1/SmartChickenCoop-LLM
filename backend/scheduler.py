@@ -41,6 +41,7 @@ _vectordb = None
 _bm25_retriever = None
 
 
+
 def check_sensors():
     """
     Periodic task: read latest sensors, run RAG if critical.

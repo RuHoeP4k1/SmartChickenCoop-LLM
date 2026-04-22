@@ -4,6 +4,7 @@ Run with: uvicorn app:app --reload
 """
 
 import os
+import json
 import asyncio
 import calendar
 import logging
@@ -13,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date, time as dtime, timedelta
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Depends
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +26,7 @@ BoundedStr = Annotated[str, StringConstraints(max_length=200)]
 
 from backend.rag_functions import (
     load_documents, split_documents, build_vector_store,
-    build_bm25_retriever, answer_query
+    build_bm25_retriever, answer_query, answer_query_stream
 )
 from backend.db_utils import (
     get_latest_sensor_reading, setup_database,
@@ -38,6 +40,8 @@ from backend.db_utils import (
     get_automation_windows_in_range,
     ALLOWED_AUTOMATION_TASKS,
     get_latest_risk_snapshot,
+    get_latest_device_control, insert_device_control,
+    DEVICE_CONTROL_DEFAULTS,
 )
 from backend.sensor_filter import (
     get_sensor_context, get_critical_alerts,
@@ -181,6 +185,17 @@ class ReviewRequest(BaseModel):
     notes: str = ""
 
 
+class DeviceControlRequest(BaseModel):
+    fan_auto: Optional[bool] = None
+    fan_override_pct: Optional[float] = Field(None, ge=0, le=100)
+    clear_fan_override: bool = False
+    door_auto: Optional[bool] = None
+    door_target: Optional[str] = None
+    feeder_auto: Optional[bool] = None
+    feeder_target: Optional[str] = None
+    chickens_owned: Optional[int] = Field(None, ge=0, le=100000)
+
+
 
 # ---------------------------------------------------------------------------
 # Core endpoints
@@ -263,6 +278,55 @@ def ask_question(request: QueryRequest, _=Depends(verify_key)):
         **{k: v for k, v in result.items() if k not in ("documents", "sensor_data")},
         "chunks": chunks,
     })
+
+
+@app.post("/ask-stream")
+def ask_stream(request: QueryRequest, _=Depends(verify_key)):
+    """Streaming version of /ask. Returns Server-Sent Events (text/event-stream)."""
+    if not state.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG pipeline not initialized. Add documents to the knowledge base.",
+        )
+
+    trimmed_history = request.history[-(CHAT_HISTORY_TURNS * 2):] if CHAT_HISTORY_TURNS > 0 else []
+
+    def event_stream():
+        for sse_line in answer_query_stream(
+            query=request.query,
+            vectordb=state.vectordb,
+            bm25_retriever=state.bm25_retriever,
+            use_sensors=request.use_sensors,
+            use_hybrid=request.use_hybrid,
+            history=trimmed_history,
+            include_task_context=request.include_task_context,
+        ):
+            yield sse_line
+            # Log to event_log once the done frame is yielded
+            if sse_line.startswith("data: "):
+                try:
+                    frame = json.loads(sse_line[6:])
+                    if frame.get("type") == "done":
+                        try:
+                            insert_event(
+                                event_type="llm_response",
+                                severity="critical" if frame.get("has_critical") else "info",
+                                user_query=request.query,
+                                llm_response=frame.get("answer", ""),
+                                sensor_snapshot=None,
+                                sensor_context_filtered=frame.get("sensor_context"),
+                                sources=frame.get("sources", []),
+                                routing_mode=frame.get("routing_mode"),
+                                routing_decision=frame.get("routing_decision"),
+                                prompt_template=frame.get("prompt_template"),
+                                response_time_ms=frame.get("response_time_ms"),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to log streaming event: {e}")
+                except Exception:
+                    pass
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/setup-db")
@@ -357,6 +421,57 @@ def get_risk_latest():
         raise HTTPException(status_code=404, detail="No risk snapshot available")
 
     return {"snapshot": snapshot}
+
+
+@app.get("/device/control")
+def get_device_control():
+    """Return the current device control state (latest row from device_control)."""
+    try:
+        state = get_latest_device_control()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+    if not state:
+        return {"state": DEVICE_CONTROL_DEFAULTS, "source": "defaults"}
+    return {"state": state, "source": "db"}
+
+
+@app.post("/device/control")
+def post_device_control(body: DeviceControlRequest):
+    """
+    Write a new device control command (always inserts, never updates).
+    Reads the latest row, applies the patch fields, writes a new row.
+    Edge device reads the latest row to know what to do.
+    Override logic: fan_override_pct IS NOT NULL → ignore auto calculations.
+    """
+    try:
+        current = get_latest_device_control() or dict(DEVICE_CONTROL_DEFAULTS)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+
+    patch = {k: v for k, v in body.dict(exclude={"clear_fan_override"}).items() if v is not None}
+    new_state = {**current, **patch}
+
+    if body.clear_fan_override:
+        new_state["fan_override_pct"] = None
+
+    try:
+        row_id = insert_device_control(
+            fan_auto=new_state.get("fan_auto", True),
+            fan_speed_pct=new_state.get("fan_speed_pct"),
+            fan_override_pct=new_state.get("fan_override_pct"),
+            fan_status_pct=new_state.get("fan_status_pct"),
+            door_auto=new_state.get("door_auto", True),
+            door_target=new_state.get("door_target"),
+            door_status=new_state.get("door_status"),
+            feeder_auto=new_state.get("feeder_auto", False),
+            feeder_target=new_state.get("feeder_target"),
+            feeder_status=new_state.get("feeder_status"),
+            chickens_owned=new_state.get("chickens_owned", 10),
+        )
+    except Exception as e:
+        raise _db_error(e)
+
+    return {"id": row_id, "status": "ok", "state": new_state}
 
 
 @app.get("/weather")

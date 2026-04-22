@@ -116,13 +116,13 @@ def get_latest_sensor_reading() -> Optional[Dict]:
                 SELECT heat_risk_score, heat_risk_level, thi_current,
                        mold_risk_score, mold_risk_level, contributing_factors
                 FROM risk_snapshots
-                ORDER BY created_at DESC
+                ORDER BY id DESC
                 LIMIT 1
             ) r ON true
             LEFT JOIN LATERAL (
                 SELECT crowding_verdict
                 FROM crowding
-                ORDER BY created_at DESC
+                ORDER BY id DESC
                 LIMIT 1
             ) c ON true
             ORDER BY s.timestamp DESC
@@ -217,8 +217,7 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                 SELECT heat_risk_score, heat_risk_level, thi_current,
                        mold_risk_score, mold_risk_level
                 FROM risk_snapshots
-                WHERE ABS(EXTRACT(EPOCH FROM (created_at - s.timestamp))) <= 600
-                ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - s.timestamp)))
+                ORDER BY id DESC
                 LIMIT 1
             ) r ON true
             WHERE s.timestamp >= %s
@@ -647,7 +646,7 @@ def get_latest_risk_snapshot() -> Optional[Dict]:
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
-            "SELECT * FROM risk_snapshots ORDER BY created_at DESC LIMIT 1"
+            "SELECT * FROM risk_snapshots ORDER BY id DESC LIMIT 1"
         )
         row = cursor.fetchone()
         cursor.close()
@@ -1086,6 +1085,97 @@ def export_reviews() -> List[Dict]:
         release_db_connection(conn)
 
 
+CREATE_DEVICE_CONTROL_SQL = """
+CREATE TABLE IF NOT EXISTS device_control (
+    id BIGSERIAL PRIMARY KEY,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    fan_auto BOOLEAN NOT NULL DEFAULT TRUE,
+    fan_speed_pct DOUBLE PRECISION,
+    fan_override_pct DOUBLE PRECISION,
+    fan_status_pct DOUBLE PRECISION,
+    door_auto BOOLEAN NOT NULL DEFAULT TRUE,
+    door_target TEXT,
+    door_status TEXT,
+    feeder_auto BOOLEAN NOT NULL DEFAULT FALSE,
+    feeder_target TEXT,
+    feeder_status TEXT,
+    chickens_owned BIGINT DEFAULT 10
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_control_id ON device_control(id DESC);
+"""
+
+DEVICE_CONTROL_DEFAULTS: Dict = {
+    "fan_auto": True,
+    "fan_speed_pct": None,
+    "fan_override_pct": None,
+    "fan_status_pct": None,
+    "door_auto": True,
+    "door_target": None,
+    "door_status": None,
+    "feeder_auto": False,
+    "feeder_target": None,
+    "feeder_status": None,
+    "chickens_owned": 10,
+}
+
+
+def get_latest_device_control() -> Optional[Dict]:
+    """Return the most recent device_control row, or None if the table is empty."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT * FROM device_control ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        cursor.close()
+        return dict(row) if row else None
+    finally:
+        release_db_connection(conn)
+
+
+def insert_device_control(
+    fan_auto: bool = True,
+    fan_speed_pct: Optional[float] = None,
+    fan_override_pct: Optional[float] = None,
+    fan_status_pct: Optional[float] = None,
+    door_auto: bool = True,
+    door_target: Optional[str] = None,
+    door_status: Optional[str] = None,
+    feeder_auto: bool = False,
+    feeder_target: Optional[str] = None,
+    feeder_status: Optional[str] = None,
+    chickens_owned: int = 10,
+) -> int:
+    """Insert a new device_control row (append-only). Returns the new row id."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO device_control (
+                fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
+                door_auto, door_target, door_status,
+                feeder_auto, feeder_target, feeder_status,
+                chickens_owned
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id""",
+            (
+                fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
+                door_auto, door_target, door_status,
+                feeder_auto, feeder_target, feeder_status,
+                chickens_owned,
+            ),
+        )
+        row_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        return row_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
 def setup_database():
     """
     Create all tables if they don't exist.
@@ -1106,10 +1196,11 @@ def setup_database():
         cursor.execute(CREATE_CHORE_DEFINITIONS_SQL)
         cursor.execute(CREATE_CHORE_LOG_SQL)
         cursor.execute(CREATE_AUTOMATION_WINDOWS_SQL)
+        cursor.execute(CREATE_DEVICE_CONTROL_SQL)
         _seed_default_chores(cursor)
         conn.commit()
         cursor.close()
-        print("Database tables created successfully (sensor + cv + risk_snapshots + event_log + reviews + egg/chore/automation)")
+        print("Database tables created successfully (sensor + cv + risk_snapshots + event_log + reviews + egg/chore/automation + device_control)")
     finally:
         release_db_connection(conn)
 

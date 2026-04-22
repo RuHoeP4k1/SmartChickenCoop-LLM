@@ -16,6 +16,66 @@ export async function askQuestion(query, history = [], useSensors = true, useHyb
   return res.json()
 }
 
+export async function askQuestionStream(
+  query,
+  history = [],
+  useSensors = true,
+  useHybrid = true,
+  includeTaskContext = false,
+  { onChunk, onDone, onError } = {},
+) {
+  let res
+  try {
+    res = await fetch('/ask-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({
+        query, history,
+        use_sensors: useSensors,
+        use_hybrid: useHybrid,
+        include_task_context: includeTaskContext,
+      }),
+    })
+  } catch (err) {
+    onError?.(err)
+    return
+  }
+
+  if (!res.ok) {
+    onError?.(new Error(`Request failed (${res.status})`))
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() // keep incomplete trailing frame
+
+      for (const frame of frames) {
+        if (!frame.startsWith('data: ')) continue
+        try {
+          const data = JSON.parse(frame.slice(6))
+          if (data.type === 'chunk') onChunk?.(data.delta)
+          else if (data.type === 'done') onDone?.(data)
+          else if (data.type === 'error') onError?.(new Error(data.message))
+        } catch {
+          // ignore malformed frames
+        }
+      }
+    }
+  } catch (err) {
+    onError?.(err)
+  }
+}
+
 // ---------- Coop Log (eggs, chores, automation) ----------
 
 export async function getEggCalendar(year, month) {
@@ -151,5 +211,21 @@ export async function getRiskLatest() {
   const res = await fetch('/risk/latest')
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`Risk fetch failed (${res.status})`)
+  return res.json()
+}
+
+export async function getDeviceControl() {
+  const res = await fetch('/device/control')
+  if (!res.ok) throw new Error(`Device control fetch failed (${res.status})`)
+  return res.json()
+}
+
+export async function setDeviceControl(patch) {
+  const res = await fetch('/device/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error(`Device control set failed (${res.status})`)
   return res.json()
 }

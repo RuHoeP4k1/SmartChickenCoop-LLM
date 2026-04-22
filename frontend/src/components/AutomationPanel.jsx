@@ -1,25 +1,22 @@
-import { useState, useEffect, useRef } from 'react'
-import { getSensors, getRiskLatest, evaluateAutomation } from '../api'
+import { useState, useEffect } from 'react'
+import { getSensors, getRiskLatest, getDeviceControl, setDeviceControl } from '../api'
 
-function Toggle({ enabled, onChange }) {
+function Toggle({ enabled, onChange, disabled }) {
   return (
     <button
-      onClick={() => onChange(!enabled)}
+      onClick={() => !disabled && onChange(!enabled)}
       role="switch"
       aria-checked={enabled}
-      className={`relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500/50 dark:focus:ring-offset-stone-800 ${
+      disabled={disabled}
+      className={`relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500/50 dark:focus:ring-offset-stone-800 disabled:opacity-40 disabled:cursor-not-allowed ${
         enabled
           ? 'bg-gradient-to-r from-green-500 to-green-400 shadow-inner'
           : 'bg-stone-300 dark:bg-stone-600'
       }`}
     >
-      <span
-        className={`inline-block h-5 w-5 rounded-full shadow-md transition-all duration-300 ${
-          enabled
-            ? 'translate-x-6 bg-white'
-            : 'translate-x-0.5 bg-white dark:bg-stone-300'
-        }`}
-      />
+      <span className={`inline-block h-5 w-5 rounded-full shadow-md transition-all duration-300 ${
+        enabled ? 'translate-x-6 bg-white' : 'translate-x-0.5 bg-white dark:bg-stone-300'
+      }`} />
     </button>
   )
 }
@@ -46,60 +43,105 @@ function SensorBadge({ label, value, status }) {
   )
 }
 
+function ActionBtn({ onClick, disabled, variant = 'default', children }) {
+  const base = 'text-xs font-medium px-3 py-1.5 rounded-lg transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed'
+  const variants = {
+    default:  'bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-200 hover:bg-stone-200 dark:hover:bg-stone-600',
+    primary:  'bg-amber-500 text-white hover:bg-amber-600',
+    danger:   'bg-red-500 text-white hover:bg-red-600',
+    success:  'bg-green-500 text-white hover:bg-green-600',
+  }
+  return (
+    <button onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]}`}>
+      {children}
+    </button>
+  )
+}
+
+// Keys that go through the draft/save flow (settings vs immediate commands)
+const SETTINGS_KEYS = ['fan_auto', 'door_auto', 'feeder_auto', 'chickens_owned']
+
 export default function AutomationPanel() {
+  const [device, setDevice] = useState(null)
+  const [draft, setDraft] = useState(null)   // null = no pending changes
   const [sensorData, setSensorData] = useState(undefined)
   const [riskData, setRiskData] = useState(null)
   const [error, setError] = useState(null)
-  const [evaluating, setEvaluating] = useState(false)
-  const [lastActions, setLastActions] = useState([])
-  const [toggles, setToggles] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('automation_toggles') || '{}') }
-    catch { return {} }
-  })
-  const togglesRef = useRef(toggles)
-  togglesRef.current = toggles
+  const [saving, setSaving] = useState(false)
+  const [fanSlider, setFanSlider] = useState(50)
 
   useEffect(() => {
     async function load() {
       try {
-        const [sensors, risk] = await Promise.all([getSensors(), getRiskLatest()])
+        const [dc, sensors, risk] = await Promise.all([
+          getDeviceControl(),
+          getSensors(),
+          getRiskLatest(),
+        ])
+        setDevice(dc?.state ?? null)
+        // don't overwrite draft on poll — user may have unsaved changes
         setSensorData(sensors)
         setRiskData(risk?.snapshot ?? null)
         setError(null)
-      } catch (err) { setError(err.message) }
+      } catch (err) {
+        setError(err.message)
+      }
     }
     load()
-    const id = setInterval(load, 15_000)
+    const id = setInterval(load, 10_000)
     return () => clearInterval(id)
   }, [])
 
-  async function runEvaluate(ventEnabled, doorEnabled) {
-    if (!ventEnabled && !doorEnabled) {
-      setLastActions([])
-      return
-    }
-    setEvaluating(true)
+  // Queue a settings change into the draft (no DB write yet)
+  function updateDraft(fields) {
+    setDraft(prev => ({
+      ...(prev ?? Object.fromEntries(SETTINGS_KEYS.map(k => [k, device[k]]))),
+      ...fields,
+    }))
+  }
+
+  // Read display value — draft takes priority for settings keys
+  function val(key) {
+    return draft !== null && key in draft ? draft[key] : device?.[key]
+  }
+
+  // Save all pending draft fields to DB at once
+  async function saveDraft() {
+    setSaving(true)
     try {
-      const result = await evaluateAutomation(ventEnabled, doorEnabled)
-      setLastActions(result.actions ?? [])
-    } catch {
-      // silent — don't surface evaluate errors over main UI
+      const result = await setDeviceControl(draft)
+      setDevice(result.state)
+      setDraft(null)
+      setError(null)
+    } catch (err) {
+      setError(err.message)
     } finally {
-      setEvaluating(false)
+      setSaving(false)
     }
   }
 
-  function setToggle(key, value) {
-    const updated = { ...toggles, [key]: value }
-    setToggles(updated)
-    localStorage.setItem('automation_toggles', JSON.stringify(updated))
-    runEvaluate(
-      key === 'vent_auto' ? value : updated.vent_auto ?? false,
-      key === 'door_auto' ? value : updated.door_auto ?? false,
-    )
+  // Immediate command (door open/close, feeder dispense, fan override)
+  async function command(fields) {
+    setSaving(true)
+    try {
+      const result = await setDeviceControl(fields)
+      setDevice(result.state)
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
+  const isDirty = draft !== null
   const r = sensorData?.reading
+  const d = device
+
+  const fanOverrideActive = d?.fan_override_pct != null
+  const fanDisplaySpeed = fanOverrideActive
+    ? d.fan_override_pct
+    : (d?.fan_speed_pct ?? null)
 
   return (
     <div className="h-full overflow-y-auto px-6 py-8 bg-stone-50 dark:bg-stone-900">
@@ -108,7 +150,6 @@ export default function AutomationPanel() {
         {/* Header */}
         <div className="mb-6">
           <h2 className="text-base font-semibold text-stone-800 dark:text-stone-100">Automation Controls</h2>
-          <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Monitor and manage coop automation systems</p>
         </div>
 
         {error && (
@@ -117,10 +158,25 @@ export default function AutomationPanel() {
           </div>
         )}
 
+        {/* Unsaved changes banner */}
+        {isDirty && (
+          <div className="flex items-center justify-between bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-xl px-4 py-3 mb-6">
+            <span className="text-sm text-amber-700 dark:text-amber-400 font-medium">Unsaved changes</span>
+            <div className="flex gap-2">
+              <ActionBtn onClick={() => setDraft(null)} disabled={saving} variant="default">
+                Discard
+              </ActionBtn>
+              <ActionBtn onClick={saveDraft} disabled={saving} variant="primary">
+                {saving ? 'Saving…' : 'Save changes'}
+              </ActionBtn>
+            </div>
+          </div>
+        )}
+
         {/* Loading skeleton */}
-        {sensorData === undefined && !error && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {[1, 2].map(i => (
+        {d === null && !error && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[1, 2, 3].map(i => (
               <div key={i} className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6">
                 <div className="skeleton h-4 w-40 mb-6" />
                 <div className="skeleton h-6 w-24 mb-4" />
@@ -130,108 +186,96 @@ export default function AutomationPanel() {
           </div>
         )}
 
-        {/* Automation cards */}
-        {r && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {d && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-            {/* Door Automation */}
-            <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
-              <div className="flex items-center justify-between mb-5">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xl">🚪</span>
-                  <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Door Automation</h3>
-                </div>
-                <StatusDot active={r.door_open} />
-              </div>
-
-              {/* Current status */}
-              <div className={`rounded-xl px-4 py-3 mb-4 ${
-                r.door_open
-                  ? 'bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-700/50'
-                  : 'bg-stone-50 dark:bg-stone-700/40 border border-stone-200 dark:border-stone-600'
-              }`}>
-                <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Current Status</p>
-                <p className={`text-lg font-bold ${r.door_open ? 'text-sky-700 dark:text-sky-400' : 'text-stone-600 dark:text-stone-300'}`}>
-                  Door is {r.door_open ? 'Open' : 'Closed'}
-                </p>
-              </div>
-
-              {/* Enable toggle */}
-              <div className="flex items-center justify-between mb-4 px-1">
-                <span className="text-sm text-stone-600 dark:text-stone-300">Enable automation</span>
-                <Toggle
-                  enabled={toggles.door_auto ?? false}
-                  onChange={v => setToggle('door_auto', v)}
-                />
-              </div>
-
-              {/* Logic rule */}
-              <div className="bg-stone-50 dark:bg-stone-700/40 rounded-xl p-3 border border-stone-200 dark:border-stone-600">
-                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-1.5">Rule</p>
-                <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">
-                  Door closes when all chickens are inside and it's after sunset.
-                  Opens again after sunrise if conditions are safe.
-                </p>
-              </div>
-
-              {/* Related sensors */}
-              <div className="mt-4 flex flex-wrap gap-2">
-                <SensorBadge label="Chickens inside" value={r.chickens_inside} status="normal" />
-              </div>
-            </div>
-
-            {/* Ventilation Automation */}
+            {/* Fan / Ventilation card */}
             <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">🌀</span>
-                  <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Ventilation Automation</h3>
+                  <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Ventilation</h3>
                 </div>
-                <StatusDot active={r.ventilation_on} />
+                <StatusDot active={r?.ventilation_on} />
               </div>
 
-              {/* Current status */}
+              {/* Speed display */}
               <div className={`rounded-xl px-4 py-3 mb-4 ${
-                r.ventilation_on
+                fanDisplaySpeed != null
                   ? 'bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-700/50'
                   : 'bg-stone-50 dark:bg-stone-700/40 border border-stone-200 dark:border-stone-600'
               }`}>
-                <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Current Status</p>
-                <p className={`text-lg font-bold ${r.ventilation_on ? 'text-sky-700 dark:text-sky-400' : 'text-stone-600 dark:text-stone-300'}`}>
-                  Fan is {r.ventilation_on ? 'Running' : 'Off'}
+                <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">
+                  {fanOverrideActive ? 'Override speed' : 'Auto speed'}
                 </p>
+                <p className="text-2xl font-bold text-stone-800 dark:text-stone-100">
+                  {fanDisplaySpeed != null ? `${Math.round(fanDisplaySpeed)}%` : '—'}
+                </p>
+                {d.fan_status_pct != null && (
+                  <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                    Actual: {Math.round(d.fan_status_pct)}%
+                  </p>
+                )}
               </div>
 
-              {/* Enable toggle */}
+              {/* Auto toggle — queues into draft */}
               <div className="flex items-center justify-between mb-4 px-1">
-                <span className="text-sm text-stone-600 dark:text-stone-300">Enable automation</span>
+                <span className="text-sm text-stone-600 dark:text-stone-300">Auto mode</span>
                 <Toggle
-                  enabled={toggles.vent_auto ?? false}
-                  onChange={v => setToggle('vent_auto', v)}
+                  enabled={val('fan_auto') ?? true}
+                  onChange={v => updateDraft({ fan_auto: v })}
+                  disabled={saving}
                 />
               </div>
 
-              {/* Logic rule */}
-              <div className="bg-stone-50 dark:bg-stone-700/40 rounded-xl p-3 border border-stone-200 dark:border-stone-600">
-                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-1.5">Rule</p>
-                <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">
-                  Fan activates when mold risk or heat stress potential reaches warning or critical levels.
-                  Turns off when conditions return to normal.
-                </p>
-              </div>
+              {/* Risk badges */}
+              {r && (
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  <SensorBadge label="Heat" value={r.heat_risk_level?.split(' - ')[0] ?? '—'} status={r.heat_risk_level?.toLowerCase().startsWith('high') ? 'critical' : r.heat_risk_level?.toLowerCase().startsWith('med') ? 'warning' : 'normal'} />
+                  <SensorBadge label="CO₂" value={r.co2_level ?? '—'} status={r.co2_level ?? 'normal'} />
+                </div>
+              )}
 
-              {/* Related sensors */}
-              <div className="mt-4 flex flex-wrap gap-2">
-                <SensorBadge label="Heat risk" value={r.heat_risk_level?.split(' - ')[0] ?? '—'} status={r.heat_risk_level?.toLowerCase().startsWith('high') ? 'critical' : r.heat_risk_level?.toLowerCase().startsWith('med') ? 'warning' : 'normal'} />
-                <SensorBadge label="Mold risk" value={r.mold_risk_level ?? '—'} status={['high','severe'].includes(r.mold_risk_level) ? 'critical' : r.mold_risk_level === 'medium' ? 'warning' : 'normal'} />
-                <SensorBadge label="CO₂" value={r.co2_level ?? '—'} status={r.co2_level ?? 'normal'} />
-                <SensorBadge label="NH₃" value={r.nh3_level ?? '—'} status={r.nh3_level ?? 'normal'} />
+              {/* Manual override — immediate command */}
+              <div className="border-t border-stone-100 dark:border-stone-700 pt-4 mt-2">
+                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-3">
+                  Manual override
+                </p>
+                {fanOverrideActive && (
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                      Override active: {Math.round(d.fan_override_pct)}%
+                    </span>
+                    <ActionBtn onClick={() => command({ clear_fan_override: true })} disabled={saving} variant="danger">
+                      Clear
+                    </ActionBtn>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={fanSlider}
+                    onChange={e => setFanSlider(Number(e.target.value))}
+                    className="flex-1 accent-amber-500"
+                  />
+                  <span className="text-xs font-mono text-stone-600 dark:text-stone-300 w-8 text-right">{fanSlider}%</span>
+                  <ActionBtn
+                    onClick={() => command({ fan_override_pct: fanSlider })}
+                    disabled={saving}
+                    variant="primary"
+                  >
+                    Set
+                  </ActionBtn>
+                </div>
               </div>
 
               {/* Fan rate from risk snapshot */}
               {riskData?.fan_rate_m3h != null && (
-                <div className="mt-4 pt-4 border-t border-stone-100 dark:border-stone-700">
-                  <span className="text-xl font-bold text-stone-800 dark:text-stone-100">
+                <div className="mt-3 pt-3 border-t border-stone-100 dark:border-stone-700">
+                  <span className="text-sm font-bold text-stone-700 dark:text-stone-200">
                     {Math.round(riskData.fan_rate_m3h)} m³/h
                   </span>
                   {riskData.decision_reason && (
@@ -239,59 +283,182 @@ export default function AutomationPanel() {
                       {riskData.decision_reason}
                     </p>
                   )}
-                  {riskData.created_at && (
-                    <p className="text-[10px] text-stone-400 dark:text-stone-500 mt-1">
-                      {new Date(riskData.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                  )}
                 </div>
               )}
             </div>
-          </div>
-        )}
 
-        {/* Last automation evaluation */}
-        {lastActions.length > 0 && (
-          <div className="mt-6 space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500">
-              Last evaluation {evaluating && <span className="text-sky-400">· updating…</span>}
-            </p>
-            {lastActions.map((a, i) => {
-              const stateColors = {
-                boosted:    'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20',
-                nominal:    'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20',
-                closed:     'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20',
-                open:       'border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-900/20',
-                monitoring: 'border-stone-300 dark:border-stone-600 bg-stone-50 dark:bg-stone-700/30',
-              }
-              const stateLabel = {
-                boosted: 'Boosted', nominal: 'Nominal',
-                closed: 'Closed', open: 'Open', monitoring: 'Monitoring',
-              }
-              return (
-                <div key={i} className={`rounded-xl border px-4 py-3 ${stateColors[a.state] ?? stateColors.monitoring}`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
-                      {a.system}
-                    </span>
-                    <span className="text-xs font-bold text-stone-700 dark:text-stone-200">
-                      {stateLabel[a.state] ?? a.state}
-                    </span>
-                  </div>
-                  <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">{a.reason}</p>
+            {/* Door card */}
+            <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🚪</span>
+                  <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Door</h3>
                 </div>
-              )
-            })}
-            <p className="text-xs text-stone-400 dark:text-stone-500">
-              Decisions logged to Event Log · hardware integration pending
-            </p>
+                <StatusDot active={r?.door_open} />
+              </div>
+
+              {/* Status */}
+              <div className={`rounded-xl px-4 py-3 mb-4 ${
+                r?.door_open
+                  ? 'bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-700/50'
+                  : 'bg-stone-50 dark:bg-stone-700/40 border border-stone-200 dark:border-stone-600'
+              }`}>
+                <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Status</p>
+                <p className={`text-2xl font-bold ${r?.door_open ? 'text-sky-700 dark:text-sky-400' : 'text-stone-600 dark:text-stone-300'}`}>
+                  {d.door_status ?? (r?.door_open ? 'Open' : 'Closed')}
+                </p>
+                {d.door_target && (
+                  <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                    Target: {d.door_target}
+                  </p>
+                )}
+              </div>
+
+              {/* Auto toggle — queues into draft */}
+              <div className="flex items-center justify-between mb-4 px-1">
+                <span className="text-sm text-stone-600 dark:text-stone-300">Auto mode</span>
+                <Toggle
+                  enabled={val('door_auto') ?? true}
+                  onChange={v => updateDraft({ door_auto: v })}
+                  disabled={saving}
+                />
+              </div>
+
+              {/* Sensor context */}
+              {r && (
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  <SensorBadge label="Inside" value={r.chickens_inside ?? '—'} status="normal" />
+                  <SensorBadge label="Owned" value={val('chickens_owned')} status="normal" />
+                </div>
+              )}
+
+              {/* Manual commands — immediate */}
+              <div className="border-t border-stone-100 dark:border-stone-700 pt-4 mt-2">
+                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-3">
+                  Manual command
+                </p>
+                <div className="flex gap-2">
+                  <ActionBtn
+                    onClick={() => command({ door_target: 'open' })}
+                    disabled={saving}
+                    variant="success"
+                  >
+                    Open
+                  </ActionBtn>
+                  <ActionBtn
+                    onClick={() => command({ door_target: 'closed' })}
+                    disabled={saving}
+                    variant="danger"
+                  >
+                    Close
+                  </ActionBtn>
+                </div>
+              </div>
+
+              {/* Flock size — queues into draft */}
+              <div className="border-t border-stone-100 dark:border-stone-700 pt-4 mt-4">
+                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-2">
+                  Flock size
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={val('chickens_owned') ?? 10}
+                    onChange={e => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!isNaN(v) && v > 0) updateDraft({ chickens_owned: v })
+                    }}
+                    className="w-20 text-sm px-2 py-1 rounded-lg border border-stone-200 dark:border-stone-600 bg-stone-50 dark:bg-stone-700 text-stone-800 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                  />
+                  <span className="text-xs text-stone-400 dark:text-stone-500">chickens owned</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Feed lid card */}
+            <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-6 transition-all duration-200 hover:shadow-md">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🪣</span>
+                  <h3 className="text-sm font-semibold text-stone-800 dark:text-stone-100">Feed Lid</h3>
+                </div>
+                <StatusDot active={d.feeder_status === 'closed' || d.feeder_target === 'closed'} />
+              </div>
+
+              {/* Status */}
+              <div className={`rounded-xl px-4 py-3 mb-4 ${
+                (d.feeder_status ?? d.feeder_target) === 'open'
+                  ? 'bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-700/50'
+                  : 'bg-stone-50 dark:bg-stone-700/40 border border-stone-200 dark:border-stone-600'
+              }`}>
+                <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wider font-medium mb-1">Status</p>
+                <p className={`text-2xl font-bold capitalize ${
+                  (d.feeder_status ?? d.feeder_target) === 'open'
+                    ? 'text-sky-700 dark:text-sky-400'
+                    : 'text-stone-600 dark:text-stone-300'
+                }`}>
+                  {d.feeder_status ?? d.feeder_target ?? '—'}
+                </p>
+                {d.feeder_target && d.feeder_status && d.feeder_target !== d.feeder_status && (
+                  <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">
+                    Target: {d.feeder_target}
+                  </p>
+                )}
+              </div>
+
+              {/* Auto toggle — queues into draft */}
+              <div className="flex items-center justify-between mb-4 px-1">
+                <span className="text-sm text-stone-600 dark:text-stone-300">Auto mode</span>
+                <Toggle
+                  enabled={val('feeder_auto') ?? false}
+                  onChange={v => updateDraft({ feeder_auto: v })}
+                  disabled={saving}
+                />
+              </div>
+
+              {/* Auto rule description */}
+              <div className="bg-stone-50 dark:bg-stone-700/40 rounded-xl p-3 border border-stone-200 dark:border-stone-600 mb-4">
+                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-1.5">Rule</p>
+                <p className="text-xs text-stone-600 dark:text-stone-300 leading-relaxed">
+                  Closes at nightfall to block rodents. Opens again at dawn with the coop door.
+                </p>
+              </div>
+
+              {/* Manual commands — immediate */}
+              <div className="border-t border-stone-100 dark:border-stone-700 pt-4 mt-2">
+                <p className="text-xs font-medium text-stone-400 dark:text-stone-500 uppercase tracking-wider mb-3">
+                  Manual command
+                </p>
+                <div className="flex gap-2">
+                  <ActionBtn
+                    onClick={() => command({ feeder_target: 'open' })}
+                    disabled={saving || (d.feeder_status ?? d.feeder_target) === 'open'}
+                    variant="success"
+                  >
+                    Open
+                  </ActionBtn>
+                  <ActionBtn
+                    onClick={() => command({ feeder_target: 'closed' })}
+                    disabled={saving || (d.feeder_status ?? d.feeder_target) === 'closed'}
+                    variant="danger"
+                  >
+                    Close
+                  </ActionBtn>
+                </div>
+              </div>
+            </div>
+
           </div>
         )}
 
-        {!lastActions.length && r && (
-          <div className="mt-6 bg-stone-50 dark:bg-stone-800/50 border border-stone-200 dark:border-stone-700 rounded-xl px-4 py-3 text-xs text-stone-500 dark:text-stone-400">
-            Enable a system above to evaluate current conditions and log a decision.
-          </div>
+        {/* Last updated indicator */}
+        {d && (
+          <p className="mt-4 text-xs text-stone-400 dark:text-stone-500 text-right">
+            Device state synced from DB ·{' '}
+            {d.updated_at ? new Date(d.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
+          </p>
         )}
       </div>
     </div>

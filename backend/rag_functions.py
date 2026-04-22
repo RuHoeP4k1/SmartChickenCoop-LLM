@@ -508,6 +508,154 @@ def generate_response(prompt: str, model: str = None) -> str:
     return text
 
 
+def generate_response_stream(prompt: str, model: str = None):
+    """Streaming variant of generate_response. Yields text chunks with <think> tags stripped."""
+    if model is None:
+        model = os.getenv("OLLAMA_MODEL", "smollm2:1.7b")
+    llm = get_llm(model)
+
+    buffer = ""
+    in_think = False
+
+    for chunk in llm.stream(prompt):
+        delta = chunk.content if hasattr(chunk, "content") else chunk
+        if not delta:
+            continue
+        buffer += delta
+
+        while True:
+            if not in_think:
+                idx = buffer.find("<think>")
+                if idx == -1:
+                    # No think tag — yield all but the last 6 chars (partial tag guard)
+                    safe = buffer[:-6] if len(buffer) > 6 else ""
+                    if safe:
+                        yield safe
+                        buffer = buffer[len(safe):]
+                    break
+                else:
+                    if idx > 0:
+                        yield buffer[:idx]
+                    buffer = buffer[idx + 7:]
+                    in_think = True
+            else:
+                idx = buffer.find("</think>")
+                if idx == -1:
+                    break
+                else:
+                    buffer = buffer[idx + 8:]
+                    in_think = False
+
+    if buffer and not in_think:
+        yield buffer.strip()
+
+
+def answer_query_stream(
+    query: str,
+    vectordb,
+    bm25_retriever,
+    use_sensors: bool = True,
+    use_hybrid: bool = True,
+    k: int = 4,
+    history: list = None,
+    sensor_data=None,
+    search_type: str = "mmr",
+    weights: list = None,
+    llm_model: str = None,
+    include_task_context: bool = False,
+):
+    """
+    Streaming RAG pipeline. Yields SSE-formatted strings:
+      data: {"type":"chunk","delta":"..."}      — one per token group
+      data: {"type":"done","sources":[...],...}  — final metadata frame
+      data: {"type":"error","message":"..."}     — on failure
+    """
+    t_start = time.time()
+
+    sensor_context = None
+    has_critical = False
+    routing_mode = None
+    routing_decision = "disabled"
+    documents = []
+    retrieval_method = "hybrid"
+
+    try:
+        if use_sensors:
+            if sensor_data is None:
+                sensor_data = get_latest_sensor_reading()
+            if sensor_data:
+                stale = is_reading_stale(sensor_data)
+                critical_alerts = [] if stale else get_critical_alerts(sensor_data)
+                has_critical = len(critical_alerts) > 0 and is_environment_query(query)
+                routing_mode = os.getenv("SENSOR_ROUTING_MODE", "llm")
+                if routing_mode == "llm":
+                    include = llm_route_sensors(query, sensor_data, model=llm_model)
+                else:
+                    include = should_include_sensors(query, sensor_data)
+                routing_decision = "include" if include else "exclude"
+                if include:
+                    sensor_context = get_sensor_context(sensor_data, query=query)
+
+        if use_hybrid:
+            documents = hybrid_search(
+                vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
+            )
+            retrieval_method = "hybrid"
+        else:
+            documents = semantic_search(vectordb, query, k=k, search_type=search_type)
+            retrieval_method = "semantic"
+
+        context = format_context(documents)
+        history_prefix = format_conversation_history(history or [])
+
+        prompt = get_prompt(
+            query=query,
+            context=context,
+            sensor_context=sensor_context,
+            has_critical=has_critical,
+        )
+        prompt_template = "emergency" if has_critical and sensor_context else "standard"
+
+        if include_task_context:
+            task_block = build_task_context()
+            if task_block:
+                prompt = f"[Recent coop activity — user-requested]\n{task_block}\n\n" + prompt
+
+        if history_prefix:
+            prompt = history_prefix + "\n\n" + prompt
+
+        full_answer = ""
+        for text_chunk in generate_response_stream(prompt, model=llm_model):
+            full_answer += text_chunk
+            yield f"data: {json.dumps({'type': 'chunk', 'delta': text_chunk})}\n\n"
+
+        response_time_ms = int((time.time() - t_start) * 1000)
+        sources = [doc.metadata.get("source", "Unknown") for doc in documents]
+        chunks = [
+            {"source": doc.metadata.get("source", "Unknown"), "content": doc.page_content}
+            for doc in documents
+        ]
+        done_frame = {
+            "type": "done",
+            "query": query,
+            "answer": full_answer,
+            "sources": sources,
+            "chunks": chunks,
+            "sensor_included": sensor_context is not None,
+            "sensor_context": sensor_context,
+            "has_critical": has_critical,
+            "retrieval_method": retrieval_method,
+            "routing_mode": routing_mode,
+            "routing_decision": routing_decision,
+            "prompt_template": prompt_template,
+            "response_time_ms": response_time_ms,
+        }
+        yield f"data: {json.dumps(done_frame, default=str)}\n\n"
+
+    except Exception as exc:
+        yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+
 # =============================================================================
 # CONVERSATION HISTORY FORMATTING
 # =============================================================================
