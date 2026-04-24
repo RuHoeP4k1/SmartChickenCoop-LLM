@@ -498,7 +498,12 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
     mold_consecutive_unfavourable_minutes INTEGER,
     contributing_factors TEXT
 );
+"""
 
+MIGRATE_RISK_SNAPSHOTS_SQL = """
+ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS fan_rate_m3h DOUBLE PRECISION;
+ALTER TABLE risk_snapshots ADD COLUMN IF NOT EXISTS decision_reason TEXT;
 CREATE INDEX IF NOT EXISTS idx_risk_snapshots_created_at ON risk_snapshots(created_at DESC);
 """
 
@@ -970,7 +975,10 @@ CREATE TABLE IF NOT EXISTS crowding (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     crowding_verdict TEXT
 );
+"""
 
+MIGRATE_CROWDING_SQL = """
+ALTER TABLE crowding ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 CREATE INDEX IF NOT EXISTS idx_crowding_created_at ON crowding(created_at DESC);
 """
 
@@ -1137,7 +1145,7 @@ def get_latest_device_control() -> Optional[Dict]:
         release_db_connection(conn)
 
 
-def insert_device_control(
+def upsert_device_control(
     fan_auto: bool = True,
     fan_speed_pct: Optional[float] = None,
     fan_override_pct: Optional[float] = None,
@@ -1149,30 +1157,37 @@ def insert_device_control(
     feeder_target: Optional[str] = None,
     feeder_status: Optional[str] = None,
     chickens_owned: int = 10,
-) -> int:
-    """Insert a new device_control row (append-only). Returns the new row id."""
+) -> None:
+    """Update the single device_control row. Inserts it on first call."""
+    params = (
+        fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
+        door_auto, door_target, door_status,
+        feeder_auto, feeder_target, feeder_status,
+        chickens_owned,
+    )
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO device_control (
-                fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
-                door_auto, door_target, door_status,
-                feeder_auto, feeder_target, feeder_status,
-                chickens_owned
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id""",
-            (
-                fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
-                door_auto, door_target, door_status,
-                feeder_auto, feeder_target, feeder_status,
-                chickens_owned,
-            ),
+            """UPDATE device_control SET
+                fan_auto = %s, fan_speed_pct = %s, fan_override_pct = %s, fan_status_pct = %s,
+                door_auto = %s, door_target = %s, door_status = %s,
+                feeder_auto = %s, feeder_target = %s, feeder_status = %s,
+                chickens_owned = %s, updated_at = NOW()""",
+            params,
         )
-        row_id = cursor.fetchone()[0]
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """INSERT INTO device_control (
+                    fan_auto, fan_speed_pct, fan_override_pct, fan_status_pct,
+                    door_auto, door_target, door_status,
+                    feeder_auto, feeder_target, feeder_status,
+                    chickens_owned
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                params,
+            )
         conn.commit()
         cursor.close()
-        return row_id
     except Exception:
         conn.rollback()
         raise
@@ -1191,8 +1206,10 @@ def setup_database():
         cursor.execute(CREATE_SENSOR_READINGS_COLSON_SQL)
         cursor.execute(MIGRATE_SENSOR_READINGS_SQL)
         cursor.execute(CREATE_CROWDING_SQL)
+        cursor.execute(MIGRATE_CROWDING_SQL)
         cursor.execute(CREATE_CV_COUNTS_SQL)
         cursor.execute(CREATE_RISK_SNAPSHOTS_SQL)
+        cursor.execute(MIGRATE_RISK_SNAPSHOTS_SQL)
         cursor.execute(CREATE_EVENT_LOG_SQL)
         cursor.execute(MIGRATE_EVENT_LOG_SQL)
         cursor.execute(CREATE_RESPONSE_REVIEWS_SQL)

@@ -580,6 +580,15 @@ def answer_query_stream(
     retrieval_method = "hybrid"
 
     try:
+        if use_hybrid:
+            documents = hybrid_search(
+                vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
+            )
+            retrieval_method = "hybrid"
+        else:
+            documents = semantic_search(vectordb, query, k=k, search_type=search_type)
+            retrieval_method = "semantic"
+
         if use_sensors:
             if sensor_data is None:
                 sensor_data = get_latest_sensor_reading()
@@ -589,21 +598,14 @@ def answer_query_stream(
                 has_critical = len(critical_alerts) > 0 and is_environment_query(query)
                 routing_mode = os.getenv("SENSOR_ROUTING_MODE", "llm")
                 if routing_mode == "llm":
-                    include = llm_route_sensors(query, sensor_data, model=llm_model)
+                    include = llm_route_sensors(
+                        query, sensor_data, model=llm_model, retrieved_passages=documents
+                    )
                 else:
                     include = should_include_sensors(query, sensor_data)
                 routing_decision = "include" if include else "exclude"
                 if include:
                     sensor_context = get_sensor_context(sensor_data, query=query)
-
-        if use_hybrid:
-            documents = hybrid_search(
-                vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
-            )
-            retrieval_method = "hybrid"
-        else:
-            documents = semantic_search(vectordb, query, k=k, search_type=search_type)
-            retrieval_method = "semantic"
 
         context = format_context(documents)
         history_prefix = format_conversation_history(history or [])
@@ -745,6 +747,17 @@ def answer_query(
     routing_mode = None
     routing_decision = "disabled"
 
+    # Step 1: Retrieve relevant documents (before routing — passages inform the routing decision)
+    if use_hybrid:
+        documents = hybrid_search(
+            vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
+        )
+        retrieval_method = "hybrid"
+    else:
+        documents = semantic_search(vectordb, query, k=k, search_type=search_type)
+        retrieval_method = "semantic"
+
+    # Step 2: Sensor routing — passes retrieved passages so the classifier has topic context
     if use_sensors:
         if sensor_data is None:
             sensor_data = get_latest_sensor_reading()
@@ -754,26 +767,17 @@ def answer_query(
             critical_alerts = [] if stale else get_critical_alerts(sensor_data)
             has_critical = len(critical_alerts) > 0 and is_environment_query(query)
 
-            # Routing: decide whether sensor context belongs in this query's prompt
             routing_mode = os.getenv("SENSOR_ROUTING_MODE", "llm")
             if routing_mode == "llm":
-                include = llm_route_sensors(query, sensor_data, model=llm_model)
+                include = llm_route_sensors(
+                    query, sensor_data, model=llm_model, retrieved_passages=documents
+                )
             else:
                 include = should_include_sensors(query, sensor_data)
 
             routing_decision = "include" if include else "exclude"
             if include:
                 sensor_context = get_sensor_context(sensor_data, query=query)
-
-    # Step 2: Retrieve relevant documents
-    if use_hybrid:
-        documents = hybrid_search(
-            vectordb, bm25_retriever, query, k=k, weights=weights, search_type=search_type
-        )
-        retrieval_method = "hybrid"
-    else:
-        documents = semantic_search(vectordb, query, k=k, search_type=search_type)
-        retrieval_method = "semantic"
 
     # Step 3: Build prompt
     context = format_context(documents)

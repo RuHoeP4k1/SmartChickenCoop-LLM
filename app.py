@@ -40,7 +40,7 @@ from backend.db_utils import (
     get_automation_windows_in_range,
     ALLOWED_AUTOMATION_TASKS,
     get_latest_risk_snapshot,
-    get_latest_device_control, insert_device_control,
+    get_latest_device_control, upsert_device_control,
     DEVICE_CONTROL_DEFAULTS,
 )
 from backend.sensor_filter import (
@@ -438,10 +438,9 @@ def get_device_control():
 @app.post("/device/control")
 def post_device_control(body: DeviceControlRequest):
     """
-    Write a new device control command (always inserts, never updates).
-    Reads the latest row, applies the patch fields, writes a new row.
-    Edge device reads the latest row to know what to do.
-    Override logic: fan_override_pct IS NOT NULL → ignore auto calculations.
+    Mutate the single device_control row (one row, always updated in place).
+    Reads current state, applies patch fields, writes back.
+    Override logic: fan_override_pct IS NOT NULL → edge device ignores auto calc.
     """
     try:
         current = get_latest_device_control() or dict(DEVICE_CONTROL_DEFAULTS)
@@ -455,7 +454,7 @@ def post_device_control(body: DeviceControlRequest):
         new_state["fan_override_pct"] = None
 
     try:
-        row_id = insert_device_control(
+        upsert_device_control(
             fan_auto=new_state.get("fan_auto", True),
             fan_speed_pct=new_state.get("fan_speed_pct"),
             fan_override_pct=new_state.get("fan_override_pct"),
@@ -471,7 +470,7 @@ def post_device_control(body: DeviceControlRequest):
     except Exception as e:
         raise _db_error(e)
 
-    return {"id": row_id, "status": "ok", "state": new_state}
+    return {"status": "ok", "state": new_state}
 
 
 @app.get("/weather")

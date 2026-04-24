@@ -599,7 +599,7 @@ NOT as a general knowledge question ("what causes...", "how to...") -> INCLUDE
 7. General knowledge (breed advice, "what is...", lifecycle, design of a coop) with no personal coop \
 reference -> EXCLUDE
 
-SENSOR STATUS: {sensor_summary}
+{passages_block}SENSOR STATUS: {sensor_summary}
 USER QUESTION: {query}
 DECISION:"""
 
@@ -607,7 +607,12 @@ _router_llm = None
 _router_model_id: Optional[str] = None
 
 
-def llm_route_sensors(user_query: str, sensor_data: Dict, model: str = None) -> bool:
+def llm_route_sensors(
+    user_query: str,
+    sensor_data: Dict,
+    model: str = None,
+    retrieved_passages: list = None,
+) -> bool:
     """
     Use an LLM to decide whether sensor data should be injected into the prompt.
 
@@ -636,7 +641,16 @@ def llm_route_sensors(user_query: str, sensor_data: Dict, model: str = None) -> 
         _router_model_id = model
 
     try:
+        passages_block = ""
+        if retrieved_passages:
+            snippets = [
+                f"- {doc.page_content[:200].replace(chr(10), ' ')}"
+                for doc in retrieved_passages[:2]
+            ]
+            passages_block = "RELEVANT KNOWLEDGE BASE PASSAGES:\n" + "\n".join(snippets) + "\n\n"
+
         prompt = _LLM_ROUTER_PROMPT.format(
+            passages_block=passages_block,
             sensor_summary=format_sensor_summary(sensor_data),
             query=user_query,
         )
