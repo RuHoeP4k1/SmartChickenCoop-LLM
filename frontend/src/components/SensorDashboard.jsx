@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getSensors, getHistory } from '../api'
+import { getSensors, getHistory, getRiskLatest } from '../api'
 
 /* ── Refresh icon ─────────────────────────────────────────────────── */
 function RefreshIcon({ className, spinning }) {
@@ -258,8 +258,16 @@ function SectionLabel({ children, first }) {
 }
 
 /* ── Main ─────────────────────────────────────────────────────────── */
+function heatScoreStatus(score) {
+  if (score == null) return 'normal'
+  if (score >= 67) return 'critical'
+  if (score >= 34) return 'warning'
+  return 'normal'
+}
+
 export default function SensorDashboard() {
   const [data, setData] = useState(undefined)
+  const [riskData, setRiskData] = useState(null)
   const [error, setError] = useState(null)
   const [updatedAt, setUpdatedAt] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -278,8 +286,9 @@ export default function SensorDashboard() {
   const load = useCallback(async (showSpinner = false) => {
     if (showSpinner) setRefreshing(true)
     try {
-      const result = await getSensors()
+      const [result, risk] = await Promise.all([getSensors(), getRiskLatest().catch(() => null)])
       setData(result)
+      setRiskData(risk?.snapshot ?? null)
       setUpdatedAt(new Date())
       setError(null)
     } catch (err) {
@@ -387,9 +396,11 @@ export default function SensorDashboard() {
                 status={r.humidity_status}
                 metricKey="humidity_pct"
               />
-              <StatusCard
+              <MetricCard
                 label="Heat Stress Index"
-                status={r.heat_stress_index}
+                value={riskData?.heat_risk_score != null ? Math.round(riskData.heat_risk_score) : null}
+                unit="/ 100"
+                status={heatScoreStatus(riskData?.heat_risk_score)}
               />
             </div>
 
