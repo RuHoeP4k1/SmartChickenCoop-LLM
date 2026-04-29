@@ -2,6 +2,7 @@ services:
   - type: web
     name: ChickenCoopComfort
     runtime: docker
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
@@ -20,6 +21,12 @@ services:
         value: 50.8798
       - key: COOP_LON
         value: 4.7005
+      - key: PORT
+        value: 10000
+    disk:
+      name: chroma-db
+      mountPath: /app/chroma_db
+      sizeGB: 1
     buildEnv:
       - key: VITE_API_KEY
         sync: false

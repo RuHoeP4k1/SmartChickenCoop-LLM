@@ -28,7 +28,13 @@ try:
     if _DATABASE_URL:
         # Hosted Postgres / Supabase — single connection string
         # connect_timeout prevents blocking uvicorn startup if DB is unreachable
-        _dsn = _DATABASE_URL if "connect_timeout" in _DATABASE_URL else _DATABASE_URL + "?connect_timeout=5"
+        _params = []
+        if "connect_timeout" not in _DATABASE_URL:
+            _params.append("connect_timeout=5")
+        if "sslmode" not in _DATABASE_URL:
+            _params.append("sslmode=require")
+        _sep = "&" if "?" in _DATABASE_URL else "?"
+        _dsn = _DATABASE_URL + (_sep + "&".join(_params) if _params else "")
         _pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=5, dsn=_dsn)
         print(f"[DB] Connected via DATABASE_URL (Supabase / hosted Postgres)")
     else:
