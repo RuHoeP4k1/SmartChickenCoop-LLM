@@ -397,7 +397,7 @@ export default function SensorDashboard() {
                 metricKey="humidity_pct"
               />
               <MetricCard
-                label="Heat Stress Index"
+                label="Thermal Humidity Index (THI)"
                 value={riskData?.heat_risk_score != null ? Math.round(riskData.heat_risk_score) : null}
                 unit="/ 100"
                 status={heatScoreStatus(riskData?.heat_risk_score)}

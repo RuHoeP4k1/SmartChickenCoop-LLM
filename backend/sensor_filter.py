@@ -384,16 +384,18 @@ def get_sensor_context(sensor_data: Dict, query: Optional[str] = None) -> str:
             if humidity_pct is not None:
                 alerts.append(f"Humidity: {humidity_pct:.0f}% ({humidity_status})")
 
-    # Heat risk (from risk_snapshots) — climate
+    # Heat risk + THI (from risk_snapshots) — climate
     if 'climate' in groups:
         heat_level = sensor_data.get("heat_risk_level") or ""
+        thi = sensor_data.get("thi_current")
         if _heat_is_non_normal(heat_level):
             level_short = heat_level.split(" - ")[0] if " - " in heat_level else heat_level
-            thi = sensor_data.get("thi_current")
             if thi is not None:
                 alerts.append(f"Heat risk: {level_short} (THI {float(thi):.1f})")
             else:
                 alerts.append(f"Heat risk: {level_short}")
+        elif thi is not None:
+            alerts.append(f"THI: {float(thi):.1f} (normal)")
 
     # Feeder — resources
     if 'resources' in groups:
@@ -479,9 +481,7 @@ def get_sensor_context(sensor_data: Dict, query: Optional[str] = None) -> str:
     risk_factors = sensor_data.get("risk_factors") or ""
     risk_context_line = ""
     if risk_factors and ('climate' in groups or 'air_quality' in groups):
-        if (_heat_is_non_normal(sensor_data.get("heat_risk_level")) or
-                _mold_is_non_normal(sensor_data.get("mold_risk_level"))):
-            risk_context_line = f"\nRisk context: {risk_factors}"
+        risk_context_line = f"\nRisk context: {risk_factors}"
 
     if alerts:
         return header + "\n" + "\n".join(f"- {a}" for a in alerts) + risk_context_line
@@ -504,12 +504,13 @@ def get_critical_alerts(sensor_data: Dict) -> list:
     critical = []
 
     if sensor_data.get("temperature_status") == "critical":
-        temp = sensor_data.get("temperature_c", 0)
+        temp = sensor_data.get("temperature_c") or 0
         critical.append(f"High temperature: {temp:.1f}°C")
 
     if sensor_data.get("humidity_status") == "critical":
-        hum = sensor_data.get("humidity_pct", 0)
-        critical.append(f"High humidity: {hum:.0f}%")
+        hum = sensor_data.get("humidity_pct") or 0
+        direction = "Low" if hum < 50 else "High"
+        critical.append(f"{direction} humidity: {hum:.0f}%")
 
     if _heat_is_critical(sensor_data.get("heat_risk_level")):
         thi = sensor_data.get("thi_current")
