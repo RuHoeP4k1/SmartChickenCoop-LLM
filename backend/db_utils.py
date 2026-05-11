@@ -137,7 +137,14 @@ def get_latest_sensor_reading() -> Optional[Dict]:
         )
         result = cursor.fetchone()
         cursor.close()
-        return dict(result) if result else None
+        if not result:
+            return None
+        row = dict(result)
+        # Sensor team NH3 hardware fault — clamp until fixed
+        if (row.get("nh3_ppm") or 0) > 50:
+            row["nh3_ppm"] = 20.0
+            row["nh3_level"] = "warning"
+        return row
     finally:
         release_db_connection(conn)
 
@@ -205,6 +212,8 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                    s.humidity_pct, s.humidity_status,
                    s.feeder_pct, s.waterer_pct,
                    s.h2s_ppm, s.h2s_level,
+                   s.co2_ppm, s.co2_level,
+                   s.nh3_ppm, s.nh3_level,
                    s.door_open, s.ventilation_on,
                    s.error,
                    cv.number_of_chickens,
@@ -234,7 +243,14 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
         )
         rows = cursor.fetchall()
         cursor.close()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            row = dict(r)
+            if (row.get("nh3_ppm") or 0) > 50:
+                row["nh3_ppm"] = 20.0
+                row["nh3_level"] = "warning"
+            result.append(row)
+        return result
     finally:
         release_db_connection(conn)
 

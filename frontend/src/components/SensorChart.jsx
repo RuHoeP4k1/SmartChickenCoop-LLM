@@ -16,6 +16,7 @@ const METRICS = [
   { key: 'h2s_ppm',            label: 'H₂S',         unit: 'ppm',  color: '#dc2626', domain: ['auto', 'auto'], decimals: 2 },
   { key: 'co2_ppm',            label: 'CO₂',         unit: 'ppm',  color: '#b45309', domain: ['auto', 'auto'], decimals: 0 },
   { key: 'nh3_ppm',            label: 'NH₃',         unit: 'ppm',  color: '#6d28d9', domain: ['auto', 'auto'], decimals: 1 },
+  { key: 'thi_current',        label: 'THI',         unit: '',     color: '#ea580c', domain: ['auto', 'auto'], decimals: 1 },
   { key: 'mold_risk_score',    label: 'Mold Risk',   unit: '',     color: '#7c3aed', domain: [0, 100], decimals: 1 },
 ]
 
