@@ -140,10 +140,6 @@ def get_latest_sensor_reading() -> Optional[Dict]:
         if not result:
             return None
         row = dict(result)
-        # Sensor team NH3 hardware fault — clamp until fixed
-        if (row.get("nh3_ppm") or 0) > 50:
-            row["nh3_ppm"] = 20.0
-            row["nh3_level"] = "warning"
         return row
     finally:
         release_db_connection(conn)
@@ -205,8 +201,22 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         since = datetime.now() - timedelta(hours=hours)
+        # Sample evenly across the window: pick every Nth row so the result
+        # never exceeds `limit` regardless of how many rows exist in the DB.
         cursor.execute(
             """
+            WITH window_rows AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (ORDER BY timestamp ASC) - 1 AS rn,
+                       COUNT(*)     OVER ()                            AS total
+                FROM sensor_readings_colson
+                WHERE timestamp >= %s
+            ),
+            sampled_ids AS (
+                SELECT id FROM window_rows
+                WHERE total <= %s
+                   OR rn %% GREATEST(1, total / %s) = 0
+            )
             SELECT s.timestamp,
                    s.temperature_c, s.temperature_status,
                    s.humidity_pct, s.humidity_status,
@@ -221,6 +231,7 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                    r.thi_current,
                    r.mold_risk_score, r.mold_risk_level
             FROM sensor_readings_colson s
+            JOIN sampled_ids si ON s.id = si.id
             LEFT JOIN LATERAL (
                 SELECT number_of_chickens
                 FROM cv_counts_colson
@@ -232,25 +243,17 @@ def get_sensor_history(hours: float = 1, limit: int = 200) -> List[Dict]:
                 SELECT heat_risk_score, heat_risk_level, thi_current,
                        mold_risk_score, mold_risk_level
                 FROM risk_snapshots
+                WHERE id <= (SELECT MAX(id) FROM risk_snapshots WHERE created_at <= s.timestamp)
                 ORDER BY id DESC
                 LIMIT 1
             ) r ON true
-            WHERE s.timestamp >= %s
             ORDER BY s.timestamp ASC
-            LIMIT %s
             """,
-            (since, limit),
+            (since, limit, limit),
         )
         rows = cursor.fetchall()
         cursor.close()
-        result = []
-        for r in rows:
-            row = dict(r)
-            if (row.get("nh3_ppm") or 0) > 50:
-                row["nh3_ppm"] = 20.0
-                row["nh3_level"] = "warning"
-            result.append(row)
-        return result
+        return [dict(r) for r in rows]
     finally:
         release_db_connection(conn)
 
@@ -282,11 +285,14 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
                 feeder_status, waterer_status,
                 feeder_pct, waterer_pct,
                 h2s_ppm, h2s_level,
+                co2_ppm, co2_level,
+                nh3_ppm, nh3_level,
                 door_open, ventilation_on,
                 error
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s
             )
             RETURNING id
         """
@@ -303,6 +309,10 @@ def insert_sensor_reading(sensor_data: Dict) -> int:
             sensor_data.get('waterer_pct'),
             sensor_data.get('h2s_ppm'),
             sensor_data.get('h2s_level', 'normal'),
+            sensor_data.get('co2_ppm'),
+            sensor_data.get('co2_level', 'normal'),
+            sensor_data.get('nh3_ppm'),
+            sensor_data.get('nh3_level', 'normal'),
             sensor_data.get('door_open', False),
             sensor_data.get('ventilation_on', False),
             sensor_data.get('error'),

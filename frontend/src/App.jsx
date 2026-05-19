@@ -7,6 +7,7 @@ import SensorChart from './components/SensorChart'
 import AlertFeed from './components/AlertFeed'
 import CoopLog from './components/CoopLog'
 import AutomationPanel from './components/AutomationPanel'
+import PinGate from './components/PinGate'
 import Weather from './components/Weather'
 import MyChickens from './components/MyChickens'
 import HeatmapView from './components/HeatmapView'
@@ -55,7 +56,7 @@ export default function App() {
       <div className={activeTab === 'alerts'     ? 'h-full' : 'hidden'}><AlertFeed /></div>
       <div className={activeTab === 'review'     ? 'h-full' : 'hidden'}><ResponseReview /></div>
       <div className={activeTab === 'eggs'       ? 'h-full' : 'hidden'}><CoopLog /></div>
-      <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><AutomationPanel /></div>
+      <div className={activeTab === 'automation' ? 'h-full' : 'hidden'}><PinGate><AutomationPanel /></PinGate></div>
       <div className={activeTab === 'weather'    ? 'h-full' : 'hidden'}><Weather /></div>
       <div className={activeTab === 'chickens'   ? 'h-full' : 'hidden'}><MyChickens /></div>
       <div className={activeTab === 'packages'   ? 'h-full' : 'hidden'}><Packages /></div>
